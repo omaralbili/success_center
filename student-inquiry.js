@@ -11,6 +11,8 @@ const ATTENDANCE_URL = "https://script.google.com/macros/s/AKfycbwqGlBz-aIG9uqyH
 let allStudents = [];
 let allTransactions = [];
 let allAttendance = [];
+let currentSelectedStudent = null;
+let currentSearchMatches = [];
 
 /* ===================================================
    توحيد الأسماء المركبة وإزالة الفروق الإملائية
@@ -59,6 +61,52 @@ function displayNormalizedName(name) {
     return str;
 }
 
+/**
+ * توحيد صيغة الصف الدراسي للمقارنة الدقيقة
+ * يزيل كلمة "الصف" أو اسم المرحلة الملحق ويوحد الهمزات
+ */
+function normalizeGrade(grade) {
+    if (!grade) return "";
+    let str = grade.toString().trim();
+    str = str.replace(/[\u064B-\u065F\u0640]/g, '');
+    str = str.replace(/^(الصف|صف)\s+/g, '');
+    str = str.replace(/\s+(الابتدائي|الاعدادي|الثانوي|لغات)$/g, '');
+    str = str.replace(/[إأآٱ]/g, 'ا');
+    str = str.replace(/ة\b/g, 'ه');
+    str = str.replace(/[ىي]/g, 'ي');
+    return str.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * التحقق من تطابق الصفين الدراسيين مع التعامل مع أشكال الكتابة المختلفة
+ */
+function isSameGrade(g1, g2) {
+    if (!g1 || !g2) return false;
+    const n1 = normalizeGrade(g1);
+    const n2 = normalizeGrade(g2);
+    if (n1 === n2) return true;
+    const stripAl = (s) => s.replace(/^ال/, '');
+    return stripAl(n1) === stripAl(n2);
+}
+
+/**
+ * توحيد اسم المرحلة (الفئة)
+ */
+function normalizeCategory(cat) {
+    if (!cat) return "";
+    let str = cat.toString().trim();
+    str = str.replace(/[\u064B-\u065F\u0640]/g, '');
+    str = str.replace(/[إأآٱ]/g, 'ا');
+    str = str.replace(/ة\b/g, 'ه');
+    str = str.replace(/[ىي]/g, 'ي');
+    return str.replace(/\s+/g, ' ').trim();
+}
+
+function isSameCategory(c1, c2) {
+    if (!c1 || !c2) return false;
+    return normalizeCategory(c1) === normalizeCategory(c2);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initTheme();
     loadAllData();
@@ -67,13 +115,19 @@ document.addEventListener("DOMContentLoaded", () => {
     // فحص ما إذا كان هناك اسم طالب ممرر عبر رابط الصفحة ?student=...
     const urlParams = new URLSearchParams(window.location.search);
     const queryStudent = urlParams.get('student');
+    const queryCategory = urlParams.get('category');
+    const queryGrade = urlParams.get('grade');
     if (queryStudent) {
         const input = document.getElementById("inquiryStudentInput");
         if (input) {
             input.value = decodeURIComponent(queryStudent);
             // الانتظار حتى تحميل البيانات ثم البحث
             setTimeout(() => {
-                selectStudent(input.value);
+                selectStudent(
+                    input.value,
+                    queryCategory ? decodeURIComponent(queryCategory) : null,
+                    queryGrade ? decodeURIComponent(queryGrade) : null
+                );
             }, 600);
         }
     }
@@ -215,8 +269,12 @@ async function loadAllData(forceRefresh = false) {
 
         if (forceRefresh) {
             showToast("تم تحديث كافة البيانات بنجاح من جوجل شيت ✅", "success");
-            const inputVal = document.getElementById("inquiryStudentInput")?.value.trim();
-            if (inputVal) selectStudent(inputVal);
+            if (currentSelectedStudent && currentSelectedStudent.name) {
+                selectStudent(currentSelectedStudent.name, currentSelectedStudent.category, currentSelectedStudent.grade);
+            } else {
+                const inputVal = document.getElementById("inquiryStudentInput")?.value.trim();
+                if (inputVal) selectStudent(inputVal);
+            }
         }
     } catch (e) {
         console.warn("Data load error:", e);
@@ -240,12 +298,13 @@ function initInquirySearch() {
         }
 
         if (!query) {
+            currentSearchMatches = [];
             dropdown.style.display = "none";
             dropdown.innerHTML = "";
             return;
         }
 
-        // جمع كل الطلاب مع تمييزهم بالفئة والصف الدراسي
+        // جمع كل الطلاب مع تمييزهم بدقة بالفئة والصف الدراسي
         const matchesMap = new Map();
         const normQuery = normalizeArabicName(query);
 
@@ -254,17 +313,22 @@ function initInquirySearch() {
             const normName = normalizeArabicName(rawName);
 
             if (normName.includes(normQuery)) {
+                const cat = (s.category || '').trim();
+                const gr = (s.grade || '').trim();
                 // مفتاح فريد يجمع بين الاسم والفئة والصف
-                const key = `${normName}_${(s.category || '').trim()}_${(s.grade || '').trim()}`;
+                const key = `${normName}_${normalizeCategory(cat)}_${normalizeGrade(gr)}`;
                 if (!matchesMap.has(key)) {
                     matchesMap.set(key, {
                         name: displayNormalizedName(rawName),
+                        rawName: rawName,
                         normName: normName,
-                        teacher: s.teacherName,
-                        category: (s.category || '').trim(),
-                        grade: (s.grade || '').trim(),
+                        teachers: s.teacherName ? [s.teacherName] : [],
+                        category: cat,
+                        grade: gr,
                         id: s.id
                     });
+                } else if (s.teacherName && !matchesMap.get(key).teachers.includes(s.teacherName)) {
+                    matchesMap.get(key).teachers.push(s.teacherName);
                 }
             }
         });
@@ -275,21 +339,27 @@ function initInquirySearch() {
             const normName = normalizeArabicName(rawName);
 
             if (normName.includes(normQuery)) {
-                const key = `${normName}_${(t.category || '').trim()}_${(t.grade || '').trim()}`;
+                const cat = (t.category || '').trim();
+                const gr = (t.grade || '').trim();
+                const key = `${normName}_${normalizeCategory(cat)}_${normalizeGrade(gr)}`;
                 if (!matchesMap.has(key)) {
                     matchesMap.set(key, {
                         name: displayNormalizedName(rawName),
+                        rawName: rawName,
                         normName: normName,
-                        teacher: t.teacherName,
-                        category: (t.category || '').trim(),
-                        grade: (t.grade || '').trim(),
+                        teachers: t.teacherName ? [t.teacherName] : [],
+                        category: cat,
+                        grade: gr,
                         id: null
                     });
+                } else if (t.teacherName && !matchesMap.get(key).teachers.includes(t.teacherName)) {
+                    matchesMap.get(key).teachers.push(t.teacherName);
                 }
             }
         });
 
         const matches = Array.from(matchesMap.values());
+        currentSearchMatches = matches;
 
         if (matches.length === 0) {
             dropdown.innerHTML = `
@@ -303,15 +373,21 @@ function initInquirySearch() {
         }
 
         const topMatches = matches.slice(0, 10);
-        dropdown.innerHTML = topMatches.map((m, idx) => `
+        dropdown.innerHTML = topMatches.map((m, idx) => {
+            const teachersText = m.teachers && m.teachers.length > 1
+                ? `${m.teachers.length} معلمين (${m.teachers.slice(0, 2).join('، ')}${m.teachers.length > 2 ? '...' : ''})`
+                : (m.teachers && m.teachers.length === 1 ? `أ/ ${m.teachers[0]}` : 'مدرسين متعددين');
+
+            return `
             <div class="autocomplete-item" data-idx="${idx}">
                 <div class="autocomplete-item-info">
                     <strong><i class="fa-solid fa-user-check" style="color: #10b981; margin-left: 6px;"></i>${highlightMatch(m.name, query)}</strong>
-                    <span><i class="fa-solid fa-layer-group"></i> ${m.category ? `<b style="color: #6366f1;">${m.category}</b> (${m.grade || ''})` : 'غير محدد'} • أ/ ${m.teacher || 'مدرسين متعددين'}</span>
+                    <span><i class="fa-solid fa-layer-group"></i> ${m.category ? `<b style="color: #6366f1;">${m.category}</b> (${m.grade || ''})` : 'غير محدد'} • <i class="fa-solid fa-chalkboard-user"></i> ${teachersText}</span>
                 </div>
                 <i class="fa-solid fa-arrow-turn-down-left" style="color: #6366f1; font-size: 11px;"></i>
             </div>
-        `).join('');
+            `;
+        }).join('');
 
         dropdown.style.display = "block";
 
@@ -322,7 +398,7 @@ function initInquirySearch() {
 
                 input.value = selected.name;
                 dropdown.style.display = "none";
-                selectStudent(selected.name, selected.category, selected.grade);
+                selectStudent(selected.rawName || selected.name, selected.category, selected.grade);
             });
         });
     });
@@ -332,7 +408,17 @@ function initInquirySearch() {
         if (e.key === "Enter") {
             e.preventDefault();
             dropdown.style.display = "none";
-            selectStudent(this.value.trim());
+            const val = this.value.trim();
+            if (!val) return;
+            const normVal = normalizeArabicName(val);
+            const exactMatches = currentSearchMatches.filter(m => m.normName === normVal);
+            if (exactMatches.length === 1) {
+                selectStudent(exactMatches[0].rawName || exactMatches[0].name, exactMatches[0].category, exactMatches[0].grade);
+            } else if (currentSearchMatches.length > 0) {
+                selectStudent(currentSearchMatches[0].rawName || currentSearchMatches[0].name, currentSearchMatches[0].category, currentSearchMatches[0].grade);
+            } else {
+                selectStudent(val);
+            }
         }
     });
 
@@ -344,6 +430,8 @@ function initInquirySearch() {
 }
 
 function clearInquirySearch() {
+    currentSelectedStudent = null;
+    currentSearchMatches = [];
     const input = document.getElementById("inquiryStudentInput");
     const dropdown = document.getElementById("inquiryDropdown");
     const clearBtn = document.getElementById("clearInquiryBtn");
@@ -353,10 +441,16 @@ function clearInquirySearch() {
 
     document.getElementById("studentResultsContainer").style.display = "none";
     document.getElementById("initialEmptyState").style.display = "block";
+
+    const dupBox = document.getElementById("duplicateProfilesContainer");
+    if (dupBox) {
+        dupBox.style.display = "none";
+        dupBox.innerHTML = "";
+    }
 }
 
 /* ───────────────────────────────────────────────────
-   عرض بيانات ومدفوعات الطالب
+   عرض بيانات ومدفوعات الطالب مع الفصل التام حسب المرحلة والصف
    ─────────────────────────────────────────────────── */
 function selectStudent(studentName, targetCategory = null, targetGrade = null) {
     if (!studentName) return;
@@ -366,54 +460,117 @@ function selectStudent(studentName, targetCategory = null, targetGrade = null) {
 
     const normTargetName = normalizeArabicName(studentName);
 
-    // إذا لم تُمرر الفئة والصف، نحاول اكتشافها من قائمة الطلاب
-    if (!targetCategory) {
-        const found = allStudents.find(s => normalizeArabicName(s.studentName) === normTargetName);
-        if (found) {
-            targetCategory = (found.category || '').trim();
-            targetGrade = (found.grade || '').trim();
+    // إذا لم تُمرر الفئة والصف، نحاول اكتشافها بدقة من قاعدة البيانات
+    if (!targetCategory || !targetGrade) {
+        const matchingStudents = allStudents.filter(s => normalizeArabicName(s.studentName) === normTargetName);
+        if (matchingStudents.length > 0) {
+            if (targetCategory && !targetGrade) {
+                const matchInCat = matchingStudents.find(s => isSameCategory(s.category, targetCategory));
+                if (matchInCat) {
+                    targetGrade = (matchInCat.grade || '').trim();
+                }
+            } else if (!targetCategory) {
+                targetCategory = (matchingStudents[0].category || '').trim();
+                targetGrade = (matchingStudents[0].grade || '').trim();
+            }
+        } else {
+            // محاولة من المعاملات
+            const matchingTxs = allTransactions.filter(t => normalizeArabicName(t.studentName) === normTargetName);
+            if (matchingTxs.length > 0) {
+                if (targetCategory && !targetGrade) {
+                    const matchInCat = matchingTxs.find(t => isSameCategory(t.category, targetCategory));
+                    if (matchInCat) targetGrade = (matchInCat.grade || '').trim();
+                } else if (!targetCategory) {
+                    targetCategory = (matchingTxs[0].category || '').trim();
+                    targetGrade = (matchingTxs[0].grade || '').trim();
+                }
+            }
         }
     }
 
-    // جلب كل المعاملات الخاصة بهذا الطالب المطابق للاسم والفئة (لمنع خلط طالب الابتدائي مع الثانوي)
-    const studentTxs = allTransactions.filter(t => {
-        const matchesName = normalizeArabicName(t.studentName) === normTargetName;
-        if (!matchesName) return false;
-        if (targetCategory && t.category) {
-            return t.category.trim() === targetCategory;
-        }
-        return true;
-    });
+    currentSelectedStudent = {
+        name: studentName,
+        category: targetCategory,
+        grade: targetGrade
+    };
 
-    // جلب معلومات الطالب من جدول الطلاب المسجلين
+    // جلب معلومات الطالب من جدول الطلاب المسجلين بالربط الدقيق للمرحلة والصف
     const studentRegistrations = allStudents.filter(s => {
         const matchesName = normalizeArabicName(s.studentName) === normTargetName;
         if (!matchesName) return false;
+
+        // التحقق من الفئة (المرحلة)
         if (targetCategory && s.category) {
-            return s.category.trim() === targetCategory;
+            if (!isSameCategory(s.category, targetCategory)) return false;
         }
+
+        // التحقق من الصف الدراسي
+        if (targetGrade && s.grade) {
+            if (!isSameGrade(s.grade, targetGrade)) return false;
+        }
+
         return true;
     });
 
-    // جلب سجلات غياب الطالب
+    // جلب المعاملات الخاصة بهذا الطالب المطابق للاسم والفئة والصف
+    const studentTxs = allTransactions.filter(t => {
+        const matchesName = normalizeArabicName(t.studentName) === normTargetName;
+        if (!matchesName) return false;
+
+        // التحقق من الفئة
+        if (targetCategory && t.category) {
+            if (!isSameCategory(t.category, targetCategory)) return false;
+        }
+
+        // التحقق من الصف
+        if (targetGrade && t.grade) {
+            if (!isSameGrade(t.grade, targetGrade)) return false;
+        }
+
+        // إذا لم يكن الصف مسجلاً في المعاملة ولكن يوجد اسم معلم
+        // نتأكد أن المعلم مسجل لهذا الطالب في نفس المرحلة والصف
+        if (targetGrade && !t.grade && t.teacherName) {
+            const belongsToTeacher = studentRegistrations.some(r =>
+                normalizeArabicName(r.teacherName) === normalizeArabicName(t.teacherName)
+            );
+            if (!belongsToTeacher) return false;
+        }
+
+        return true;
+    });
+
+    // جلب سجلات غياب الطالب المطابقة للاسم والفئة والصف
     const studentAbsences = allAttendance.filter(a => {
         const matchesName = normalizeArabicName(a.studentName) === normTargetName && a.status === 'غائب';
         if (!matchesName) return false;
+
         if (targetCategory && a.category) {
-            return a.category.trim() === targetCategory;
+            if (!isSameCategory(a.category, targetCategory)) return false;
         }
+
+        if (targetGrade && a.grade) {
+            if (!isSameGrade(a.grade, targetGrade)) return false;
+        }
+
+        if (targetGrade && !a.grade && a.teacherName) {
+            const belongsToTeacher = studentRegistrations.some(r =>
+                normalizeArabicName(r.teacherName) === normalizeArabicName(a.teacherName)
+            );
+            if (!belongsToTeacher) return false;
+        }
+
         return true;
     });
 
     emptyState.style.display = "none";
     resultsContainer.style.display = "block";
 
-    // تحديث بيانات بطاقة الطالب وعرض الاسم المركب موحداً
+    // تحديث بيانات بطاقة الطالب
     document.getElementById("cardStudentName").textContent = displayNormalizedName(studentName);
 
     let subtextParts = [];
-    if (targetCategory) {
-        subtextParts.push(`${targetCategory}${targetGrade ? ' (' + targetGrade + ')' : ''}`);
+    if (targetCategory || targetGrade) {
+        subtextParts.push(`${targetCategory || ''}${targetGrade ? ' (' + targetGrade + ')' : ''}`);
     } else if (studentRegistrations.length > 0) {
         const cat = studentRegistrations[0].category;
         const gr = studentRegistrations[0].grade;
@@ -421,10 +578,25 @@ function selectStudent(studentName, targetCategory = null, targetGrade = null) {
     }
     document.getElementById("cardStudentSubtext").textContent = subtextParts.join(" • ") || "طالب مسجل بالسنتر";
 
-    // حساب الإحصائيات
+    // تجميع المعلمين والإحصائيات
     let totalPaid = 0;
     const teachersMap = new Map();
 
+    // 1. تسجيل المعلمين المسجل معهم الطالب في هذا الصف أولاً لضمان الدقة
+    studentRegistrations.forEach(r => {
+        const tName = r.teacherName || "مدرس غير محدد";
+        if (!teachersMap.has(tName)) {
+            teachersMap.set(tName, {
+                teacherName: tName,
+                category: r.category || targetCategory,
+                grade: r.grade || targetGrade,
+                payments: [],
+                absences: []
+            });
+        }
+    });
+
+    // 2. ربط المدفوعات بالمعلمين
     studentTxs.forEach(t => {
         const amt = parseFloat(t.amount) || 0;
         totalPaid += amt;
@@ -433,8 +605,8 @@ function selectStudent(studentName, targetCategory = null, targetGrade = null) {
         if (!teachersMap.has(tName)) {
             teachersMap.set(tName, {
                 teacherName: tName,
-                category: t.category,
-                grade: t.grade,
+                category: t.category || targetCategory,
+                grade: t.grade || targetGrade,
                 payments: [],
                 absences: []
             });
@@ -442,27 +614,14 @@ function selectStudent(studentName, targetCategory = null, targetGrade = null) {
         teachersMap.get(tName).payments.push(t);
     });
 
-    // إذا كان مسجلاً مع معلمين بدون معاملات بعد، نعرضهم أيضاً
-    studentRegistrations.forEach(r => {
-        if (r.teacherName && !teachersMap.has(r.teacherName)) {
-            teachersMap.set(r.teacherName, {
-                teacherName: r.teacherName,
-                category: r.category,
-                grade: r.grade,
-                payments: [],
-                absences: []
-            });
-        }
-    });
-
-    // توزيع سجلات الغياب على كل معلم
+    // 3. ربط الغياب بالمعلمين
     studentAbsences.forEach(a => {
         const tName = a.teacherName || "مدرس غير محدد";
         if (!teachersMap.has(tName)) {
             teachersMap.set(tName, {
                 teacherName: tName,
-                category: a.category,
-                grade: a.grade,
+                category: a.category || targetCategory,
+                grade: a.grade || targetGrade,
                 payments: [],
                 absences: []
             });
@@ -474,6 +633,9 @@ function selectStudent(studentName, targetCategory = null, targetGrade = null) {
     document.getElementById("cardMonthsCount").textContent = studentTxs.length;
     document.getElementById("cardTeachersCount").textContent = teachersMap.size;
     document.getElementById("cardTotalAbsences").textContent = studentAbsences.length;
+
+    // فحص وعرض تنبيه تشابه الأسماء في حال وجود طلاب آخرين بنفس الاسم
+    checkAndRenderDuplicateProfiles(studentName, targetCategory, targetGrade);
 
     // بناء شبكة المعلمين
     const grid = document.getElementById("teachersGrid");
@@ -553,6 +715,76 @@ function selectStudent(studentName, targetCategory = null, targetGrade = null) {
     });
 }
 
+/**
+ * فحص ما إذا كان هناك طلاب آخرون بنفس الاسم في مراحل أو صفوف أخرى
+ * وعرض تنبيه يتيح التبديل بينهم بنقرة واحدة
+ */
+function checkAndRenderDuplicateProfiles(studentName, currentCat, currentGrade) {
+    const container = document.getElementById("duplicateProfilesContainer");
+    if (!container) return;
+
+    const normTargetName = normalizeArabicName(studentName);
+    const currentKey = `${normalizeCategory(currentCat)}_${normalizeGrade(currentGrade)}`;
+
+    const otherProfilesMap = new Map();
+
+    allStudents.forEach(s => {
+        if (normalizeArabicName(s.studentName) === normTargetName) {
+            const cat = (s.category || '').trim();
+            const gr = (s.grade || '').trim();
+            const key = `${normalizeCategory(cat)}_${normalizeGrade(gr)}`;
+            if (key !== currentKey && (cat || gr)) {
+                if (!otherProfilesMap.has(key)) {
+                    otherProfilesMap.set(key, {
+                        name: displayNormalizedName(s.studentName),
+                        rawName: s.studentName,
+                        category: cat,
+                        grade: gr,
+                        teachers: s.teacherName ? [s.teacherName] : []
+                    });
+                } else if (s.teacherName && !otherProfilesMap.get(key).teachers.includes(s.teacherName)) {
+                    otherProfilesMap.get(key).teachers.push(s.teacherName);
+                }
+            }
+        }
+    });
+
+    const otherProfiles = Array.from(otherProfilesMap.values());
+
+    if (otherProfiles.length === 0) {
+        container.style.display = "none";
+        container.innerHTML = "";
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="duplicate-profiles-banner">
+            <div class="duplicate-profiles-title">
+                <i class="fa-solid fa-users" style="font-size: 18px; color: #f59e0b;"></i>
+                <div>
+                    <strong>تنبيه تشابه أسماء:</strong>
+                    <span>يوجد طالب آخر بنفس الاسم (<strong>${displayNormalizedName(studentName)}</strong>) في صفوف دراسية أخرى:</span>
+                </div>
+            </div>
+            <div class="duplicate-profiles-chips">
+                ${otherProfiles.map(p => {
+                    const tText = p.teachers.length > 0 ? ` • أ/ ${p.teachers.join('، ')}` : '';
+                    const escapedName = (p.rawName || p.name).replace(/'/g, "\\'");
+                    const escapedCat = p.category.replace(/'/g, "\\'");
+                    const escapedGr = p.grade.replace(/'/g, "\\'");
+                    return `
+                        <button type="button" class="switch-profile-btn" onclick="selectStudent('${escapedName}', '${escapedCat}', '${escapedGr}')" title="عرض ملف هذا الطالب">
+                            <i class="fa-solid fa-arrow-right-arrow-left"></i>
+                            <span>عرض طالب: <b>${p.category} (${p.grade})</b>${tText}</span>
+                        </button>
+                    `;
+                }).join('')}
+            </div>
+        </div>
+    `;
+    container.style.display = "block";
+}
+
 function extractMonthName(dateStr) {
     if (!dateStr) return "شهر غير محدد";
     try {
@@ -581,4 +813,3 @@ function highlightMatch(text, query) {
     const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
     return text.replace(regex, '<span style="color: #6366f1; text-decoration: underline; font-weight: 800;">$1</span>');
 }
-

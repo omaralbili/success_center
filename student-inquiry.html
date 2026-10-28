@@ -21,14 +21,31 @@
     <link rel="apple-touch-icon" href="logo.png">
 
     <style>
+        .inquiry-search-section {
+            position: relative;
+            z-index: 500;
+        }
+
         .inquiry-search-wrapper {
             position: relative;
             margin-bottom: 24px;
-            z-index: 50;
+            z-index: 1000;
         }
 
         #inquiryDropdown {
-            z-index: 1000;
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            z-index: 99999 !important;
+            background: var(--card-bg);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border: 1.5px solid var(--input-focus-border, #6366f1);
+            border-radius: 14px;
+            box-shadow: 0 20px 45px rgba(0, 0, 0, 0.3);
+            max-height: 280px;
+            overflow-y: auto;
         }
 
         .inquiry-input-box {
@@ -318,6 +335,131 @@
             opacity: 0.35;
             display: block;
         }
+
+        /* تنبيه تشابه الأسماء */
+        .duplicate-profiles-banner {
+            background: rgba(245, 158, 11, 0.08);
+            border: 1.5px dashed rgba(245, 158, 11, 0.45);
+            border-radius: 14px;
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .duplicate-profiles-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #d97706;
+            font-size: 13.5px;
+        }
+
+        .duplicate-profiles-chips {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .switch-profile-btn {
+            background: var(--card-bg);
+            border: 1.5px solid rgba(245, 158, 11, 0.35);
+            color: var(--text-title);
+            padding: 7px 14px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+            font-family: inherit;
+        }
+
+        .switch-profile-btn:hover {
+            background: #f59e0b;
+            color: #fff;
+            border-color: #f59e0b;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25);
+        }
+
+        /* تنسيق حالة البداية الفارغة وتعديل مسافتها */
+        .empty-history-card {
+            position: relative;
+            z-index: 1;
+            margin-top: 55px;
+            padding: 48px 24px;
+            text-align: center;
+            background: var(--section-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1.5px dashed var(--border-color);
+            border-radius: 20px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.02);
+            transition: all 0.3s ease;
+        }
+
+        .empty-state-icon-wrapper {
+            width: 76px;
+            height: 76px;
+            margin: 0 auto 16px;
+            border-radius: 22px;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(16, 185, 129, 0.12) 100%);
+            border: 1.5px solid rgba(99, 102, 241, 0.22);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.1);
+        }
+
+        .empty-state-icon {
+            font-size: 34px;
+            color: #6366f1;
+        }
+
+        .empty-history-card h3 {
+            color: var(--text-title);
+            font-size: 19px;
+            font-weight: 800;
+            margin: 0 0 8px 0;
+        }
+
+        .empty-history-card p {
+            color: var(--text-muted);
+            font-size: 14px;
+            max-width: 540px;
+            margin: 0 auto 20px;
+            line-height: 1.7;
+        }
+
+        .inquiry-hint-pills {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .inquiry-hint-pills span {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12.5px;
+            font-weight: 600;
+            color: var(--text-title);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+        }
     </style>
 </head>
 <body>
@@ -354,7 +496,7 @@
         </div>
 
         <!-- قسم البحث الذكي -->
-        <div class="section">
+        <div class="section inquiry-search-section">
             <h2><i class="fa-solid fa-magnifying-glass" style="color: #6366f1;"></i> ابحث عن اسم الطالب</h2>
             <p style="margin-top: -6px; margin-bottom: 16px; color: var(--text-muted); font-size: 13.5px;">
                 اكتب اسم الطالب أو جزء منه للبحث السريع في قاعدة بيانات المركز:
@@ -412,6 +554,9 @@
                 </div>
             </div>
 
+            <!-- تنبيه تشابه الأسماء والتبديل السريع -->
+            <div id="duplicateProfilesContainer" style="display: none;"></div>
+
             <!-- تفاصيل الدفعات لكل مدرس -->
             <div class="section">
                 <h2><i class="fa-solid fa-receipt" style="color: #10b981;"></i> الشهور والمدفوعات لكل مدرس</h2>
@@ -420,12 +565,19 @@
         </div>
 
         <!-- حالة فارغة عند فتح الصفحة -->
-        <div id="initialEmptyState" class="empty-history section" style="text-align: center; margin-top: 40px; padding: 60px 20px;">
-            <i class="fa-solid fa-user-clock"></i>
-            <h3 style="color: var(--text-title); margin-bottom: 6px;">يرجى البحث عن طالب</h3>
-            <p style="color: var(--text-muted); font-size: 14px; margin: 0;">
-                اكتب اسم الطالب في شريط البحث بالأعلى لعرض سجله المالي والشهور المسددة لكل معلم.
+        <div id="initialEmptyState" class="empty-history-card">
+            <div class="empty-state-icon-wrapper">
+                <i class="fa-solid fa-user-graduate empty-state-icon"></i>
+            </div>
+            <h3>يرجى البحث عن طالب</h3>
+            <p>
+                اكتب اسم الطالب في شريط البحث بالأعلى لعرض سجله المالي والشهور المسددة لكل معلم وسجلات الغياب بدقة.
             </p>
+            <div class="inquiry-hint-pills">
+                <span><i class="fa-solid fa-bolt" style="color: #6366f1;"></i> بحث ذكي وفوري</span>
+                <span><i class="fa-solid fa-layer-group" style="color: #10b981;"></i> فصل تام حسب المرحلة والصف</span>
+                <span><i class="fa-solid fa-receipt" style="color: #f59e0b;"></i> عرض كامل للإيصالات والغياب</span>
+            </div>
         </div>
     </div>
 
