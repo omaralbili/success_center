@@ -62,16 +62,24 @@
 
     <div class="roles-grid">
         <!-- كارت الطالب -->
-        <div class="role-card student-card" onclick="loginAsStudent()">
+        <div class="role-card student-card">
             <div class="role-icon-box">
                 <i class="fa-solid fa-user-graduate"></i>
             </div>
             <h3>طالب</h3>
             <p>دفع المصروفات الشهرية وتسجيل بيانات التحصيل ورفع الإيصال</p>
-            <button class="role-btn btn-student" type="button">
-                <span>دخول كطالب</span>
-                <i class="fa-solid fa-arrow-left"></i>
-            </button>
+            <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
+                <button class="role-btn btn-student" type="button" onclick="loginAsStudent()">
+                    <span>دخول كطالب</span>
+                    <i class="fa-solid fa-arrow-left"></i>
+                </button>
+                <a href="student-scan.html" style="text-decoration: none; width: 100%;">
+                    <button type="button" style="width: 100%; background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1.5px solid rgba(16, 185, 129, 0.35); padding: 10px; border-radius: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; font-family: var(--font-main);">
+                        <i class="fa-solid fa-qrcode"></i>
+                        <span>تسجيل حضوري (QR)</span>
+                    </button>
+                </a>
+            </div>
         </div>
 
         <!-- كارت الإدارة -->
@@ -400,13 +408,19 @@
         <div class="responsive-action-row" style="align-items: center;">
             <div class="input-cell">
                 <h2 style="margin: 0 0 6px 0;"><i class="fa-solid fa-clipboard-user" style="color: #10b981;"></i> الحضور والغياب</h2>
-                <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">تسجيل ومتابعة حضور وغياب الطلاب لكل مدرس مع إحصائيات شهرية مفصّلة.</p>
+                <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">تسجيل ومتابعة حضور وغياب الطلاب لكل مدرس مع إحصائيات شهرية وشاشة الـ QR للطلاب.</p>
             </div>
-            <div class="btn-cell">
-                <a href="attendance.html" target="_blank" style="text-decoration: none; display: block;">
+            <div class="btn-cell" style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <a href="qr-display.html" target="_blank" style="text-decoration: none;">
+                    <button type="button" style="margin-top:0; background: linear-gradient(135deg,#6366f1,#4f46e5); color:#fff; border:none; padding:12px 18px; border-radius:12px; font-family:var(--font-main); font-size:14px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:8px; box-shadow:0 4px 14px rgba(99,102,241,.3);" title="عرض شاشة الـ QR على شاشة السنتر">
+                        <i class="fa-solid fa-qrcode"></i>
+                        <span>شاشة الـ QR للسنتر</span>
+                    </button>
+                </a>
+                <a href="attendance.html" target="_blank" style="text-decoration: none;">
                     <button type="button" style="margin-top:0; background: linear-gradient(135deg,#10b981,#059669); color:#fff; border:none; padding:12px 22px; border-radius:12px; font-family:var(--font-main); font-size:14px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:8px; box-shadow:0 4px 14px rgba(16,185,129,.3);" title="فتح صفحة الحضور والغياب">
                         <i class="fa-solid fa-arrow-up-right-from-square"></i>
-                        <span>تسجيل الحضور</span>
+                        <span>كشف الحضور</span>
                     </button>
                 </a>
             </div>
@@ -425,6 +439,24 @@
                     <button type="button" class="btn-indigo" style="margin-top:0; background: linear-gradient(135deg,#4f46e5,#4338ca);" title="فتح شاشة الاستعلام">
                         <i class="fa-solid fa-arrow-up-right-from-square"></i>
                         <span>الاستعلام عن طالب</span>
+                    </button>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- قسم إدارة المصروفات والمخرجات (خاص بالإدارة) -->
+    <div class="section admin-only" style="background: linear-gradient(135deg, rgba(239,68,68,0.07) 0%, rgba(245,158,11,0.07) 100%); border: 1.5px solid rgba(239,68,68,0.25);">
+        <div class="responsive-action-row" style="align-items: center;">
+            <div class="input-cell">
+                <h2 style="margin: 0 0 6px 0;"><i class="fa-solid fa-wallet" style="color: #ef4444;"></i> حساب المصروفات والمخرجات</h2>
+                <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">تسجيل ومتابعة مصاريف ومخرجات السنتر اليومية والشهرية مع جدول تفصيلي وإحصائيات مباشرة من قاعدة البيانات.</p>
+            </div>
+            <div class="btn-cell">
+                <a href="expenses.html" target="_blank" style="text-decoration: none; display: block;">
+                    <button type="button" style="margin-top:0; background: linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; padding:12px 22px; border-radius:12px; font-family:var(--font-main); font-size:14px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:8px; box-shadow:0 4px 14px rgba(239,68,68,.3);" title="فتح صفحة المصروفات">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                        <span>إدارة المصروفات</span>
                     </button>
                 </a>
             </div>
