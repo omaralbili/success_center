@@ -273,41 +273,100 @@
             <div id="studentNameDropdown" class="autocomplete-dropdown"></div>
         </div>
 
-        <label><i class="fa-solid fa-chalkboard-user"></i> المعلم:</label>
-        <select id="teacherSelect">
-            <option value="">-- جاري التحميل... --</option>
-        </select>
-
-        <div class="grid-2">
-            <div>
-                <label><i class="fa-solid fa-layer-group"></i> الفئة الدراسية:</label>
-                <select id="categorySelect" onchange="updateGrades('categorySelect', 'gradeSelect')">
-                    <option value="">-- اختر الفئة --</option>
-                    <option value="ابتدائي">ابتدائي</option>
-                    <option value="ابتدائي لغات">ابتدائي لغات</option>
-                    <option value="اعدادي">إعدادي</option>
-                    <option value="اعدادي لغات">إعدادي لغات</option>
-                    <option value="ثانوي">ثانوي</option>
-                    <option value="ثانوي لغات">ثانوي لغات</option>
-                </select>
+        <!-- =========================================================
+             حاوية المعلمين المتعددين (تظهر تلقائياً عندما يكون للطالب أكثر من مدرس)
+             ========================================================= -->
+        <div id="multiTeachersContainer" class="multi-teachers-panel" style="display: none;">
+            <div class="multi-teachers-header">
+                <div class="multi-header-info">
+                    <span class="multi-title"><i class="fa-solid fa-chalkboard-user"></i> معلمو الطالب المسجل لديهم:</span>
+                    <span id="multiTeacherCountBadge" class="multi-badge">0 معلمين</span>
+                </div>
+                <div class="multi-header-actions">
+                    <button type="button" class="btn-chip" onclick="toggleSelectAllTeachers(true)" title="تحديد جميع معلمي الطالب">
+                        <i class="fa-solid fa-check-double"></i> تحديد الكل
+                    </button>
+                    <button type="button" class="btn-chip btn-chip-outline" onclick="toggleSelectAllTeachers(false)" title="إلغاء تحديد الكل">
+                        <i class="fa-solid fa-xmark"></i> إلغاء
+                    </button>
+                    <button type="button" class="btn-chip btn-chip-switch" onclick="switchToManualSingleTeacher()" title="التبديل إلى اختيار مدرس يدوي من القائمة">
+                        <i class="fa-solid fa-repeat"></i> اختيار يدوي
+                    </button>
+                </div>
             </div>
-            <div>
-                <label><i class="fa-solid fa-book-open"></i> الصف الدراسي:</label>
-                <select id="gradeSelect">
-                    <option value="">-- اختر الصف أولاً --</option>
-                </select>
+
+            <!-- أداة التطبيق السريع للمبلغ الموحد -->
+            <div class="quick-unified-amount-box">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>مبلغ موحد لكل مدرس:</span>
+                <input type="text" id="quickUnifiedAmount" placeholder="مثال: 150" inputmode="numeric" oninput="convertAmountToEnglish(this)">
+                <button type="button" onclick="applyUnifiedAmountToSelected()">
+                    <i class="fa-solid fa-check"></i> تطبيق
+                </button>
+            </div>
+
+            <!-- قائمة كروت المدرسين -->
+            <div id="multiTeachersList" class="multi-teachers-list"></div>
+
+            <!-- شريط الملخص المالي اللحظي -->
+            <div class="multi-summary-bar">
+                <div class="summary-stat">
+                    <span>عدد المعلمين المحددين:</span>
+                    <strong id="summarySelectedCount">0</strong>
+                </div>
+                <div class="summary-divider"></div>
+                <div class="summary-stat total-stat">
+                    <span>إجمالي المبلغ المطلوب دفعه:</span>
+                    <strong id="summaryTotalAmount">0</strong>
+                    <small>جنيه</small>
+                </div>
             </div>
         </div>
 
-        <div class="payment-amount-row">
-            <div class="input-cell">
-                <label><i class="fa-solid fa-money-bill-wave"></i> المبلغ المحصل (جنيه):</label>
-                <input type="text" id="amount" placeholder="مثال: ١٥٠ أو 150" inputmode="numeric" oninput="convertAmountToEnglish(this)">
+        <!-- قسم الاختيار الفردي التقليدي (يظهر في الوضع اليدوي أو للطلاب غير المسجلين) -->
+        <div id="singleTeacherSection">
+            <div class="section-switch-row" id="manualSwitchBackRow" style="display: none;">
+                <button type="button" class="btn-chip btn-chip-switch" onclick="reopenMultiTeachersSection()">
+                    <i class="fa-solid fa-arrow-right"></i> الرجوع لمعلمي الطالب المسجلين (<span id="backToTeachersCount">0</span>)
+                </button>
             </div>
-            <div class="qr-cell">
-                <div class="qr-box">
-                    <i class="fa-solid fa-qrcode"></i>
-                    <span>انستا باي<br><small style="font-size: 11px; opacity: 0.8;">InstaPay QR</small></span>
+
+            <label><i class="fa-solid fa-chalkboard-user"></i> المعلم:</label>
+            <select id="teacherSelect">
+                <option value="">-- جاري التحميل... --</option>
+            </select>
+
+            <div class="grid-2">
+                <div>
+                    <label><i class="fa-solid fa-layer-group"></i> الفئة الدراسية:</label>
+                    <select id="categorySelect" onchange="updateGrades('categorySelect', 'gradeSelect')">
+                        <option value="">-- اختر الفئة --</option>
+                        <option value="ابتدائي">ابتدائي</option>
+                        <option value="ابتدائي لغات">ابتدائي لغات</option>
+                        <option value="اعدادي">إعدادي</option>
+                        <option value="اعدادي لغات">إعدادي لغات</option>
+                        <option value="ثانوي">ثانوي</option>
+                        <option value="ثانوي لغات">ثانوي لغات</option>
+                    </select>
+                </div>
+                <div>
+                    <label><i class="fa-solid fa-book-open"></i> الصف الدراسي:</label>
+                    <select id="gradeSelect">
+                        <option value="">-- اختر الصف أولاً --</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="payment-amount-row">
+                <div class="input-cell">
+                    <label><i class="fa-solid fa-money-bill-wave"></i> المبلغ المحصل (جنيه):</label>
+                    <input type="text" id="amount" placeholder="مثال: ١٥٠ أو 150" inputmode="numeric" oninput="convertAmountToEnglish(this)">
+                </div>
+                <div class="qr-cell">
+                    <div class="qr-box">
+                        <i class="fa-solid fa-qrcode"></i>
+                        <span>انستا باي<br><small style="font-size: 11px; opacity: 0.8;">InstaPay QR</small></span>
+                    </div>
                 </div>
             </div>
         </div>

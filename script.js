@@ -457,6 +457,263 @@ async function loadStudentsDatabase() {
 }
 
 /* ===================================================
+   إدارة واجهة تحصيل الطلاب المتعددين للمعلمين (Multi-Teacher Payment Logic)
+   =================================================== */
+let currentStudentTeachers = []; // قائمة مدرسي الطالب المختار
+let isMultiTeacherMode = false;  // حالة تفعيل التحصيل المجمع
+
+/**
+ * جلب جميع المدرسين المسجلين لطالب معين من قاعدة البيانات
+ */
+function getTeachersForStudent(studentName) {
+    if (!studentName) return [];
+    const norm = normalizeArabicName(studentName);
+    const matches = allStudentsList.filter(s => normalizeArabicName(s.studentName) === norm);
+    
+    // استبعاد التكرارات لنفس المدرس
+    const uniqueMap = new Map();
+    matches.forEach(item => {
+        const t = (item.teacherName || '').trim();
+        if (t && !uniqueMap.has(t)) {
+            uniqueMap.set(t, item);
+        }
+    });
+    return Array.from(uniqueMap.values());
+}
+
+/**
+ * عرض كروت المدرسين التفاعلية عند اختيار الطالب
+ */
+function setupStudentTeachersUI(studentName) {
+    const multiContainer = document.getElementById("multiTeachersContainer");
+    const singleSection = document.getElementById("singleTeacherSection");
+    const manualSwitchRow = document.getElementById("manualSwitchBackRow");
+    const countBadge = document.getElementById("multiTeacherCountBadge");
+    const listEl = document.getElementById("multiTeachersList");
+    
+    if (!multiContainer || !listEl) return;
+
+    currentStudentTeachers = getTeachersForStudent(studentName);
+
+    // إذا كان الطالب مسجلاً لدى أكثر من مدرس
+    if (currentStudentTeachers.length > 1) {
+        isMultiTeacherMode = true;
+        multiContainer.style.display = "block";
+        if (singleSection) singleSection.style.display = "none";
+        if (manualSwitchRow) manualSwitchRow.style.display = "none";
+        if (countBadge) countBadge.textContent = `${currentStudentTeachers.length} معلمين`;
+
+        // رسم كروت المعلمين
+        renderMultiTeacherCards(currentStudentTeachers);
+        updateMultiPaymentSummary();
+    } else if (currentStudentTeachers.length === 1) {
+        // إذا كان مسجلاً لدى مدرس واحد فقط: تفعيل النمط الفردي وتعبئة بياناته تلقائياً
+        isMultiTeacherMode = false;
+        multiContainer.style.display = "none";
+        if (singleSection) singleSection.style.display = "block";
+        if (manualSwitchRow) manualSwitchRow.style.display = "none";
+
+        const single = currentStudentTeachers[0];
+        fillSingleTeacherFields(single.teacherName, single.category, single.grade);
+    } else {
+        // طالب غير مسجل مسبقاً (زائر): الاعتماد على النمط اليدوي
+        isMultiTeacherMode = false;
+        multiContainer.style.display = "none";
+        if (singleSection) singleSection.style.display = "block";
+        if (manualSwitchRow) manualSwitchRow.style.display = "none";
+    }
+}
+
+/**
+ * تعبئة حقول المعلم الفردي
+ */
+function fillSingleTeacherFields(teacherName, category, grade) {
+    if (teacherName) {
+        const teacherSel = document.getElementById("teacherSelect");
+        if (teacherSel) {
+            let found = Array.from(teacherSel.options).some(o => o.value === teacherName);
+            if (!found) {
+                teacherSel.add(new Option(teacherName, teacherName));
+            }
+            teacherSel.value = teacherName;
+        }
+    }
+
+    if (category) {
+        const catSel = document.getElementById("categorySelect");
+        if (catSel) {
+            catSel.value = category;
+            updateGrades('categorySelect', 'gradeSelect');
+        }
+    }
+
+    if (grade) {
+        const gradeSel = document.getElementById("gradeSelect");
+        if (gradeSel) {
+            gradeSel.value = grade;
+        }
+    }
+}
+
+/**
+ * رسم بطاقات المعلمين بالـ HTML
+ */
+function renderMultiTeacherCards(teachers) {
+    const listEl = document.getElementById("multiTeachersList");
+    if (!listEl) return;
+
+    listEl.innerHTML = teachers.map((item, idx) => `
+        <div class="teacher-pay-card active" id="teacherCard_${idx}">
+            <div class="teacher-pay-info">
+                <input type="checkbox" id="teacherCheck_${idx}" class="teacher-check-input" checked onchange="handleTeacherCheckChange(${idx})">
+                <div class="teacher-details">
+                    <span class="teacher-name-txt"><i class="fa-solid fa-chalkboard-user"></i> أ/ ${item.teacherName}</span>
+                    <span class="teacher-grade-tag"><b>${item.category || 'غير محدد'}</b> • (${item.grade || 'غير محدد'})</span>
+                </div>
+            </div>
+            <div class="teacher-pay-amount-box">
+                <input type="text" id="teacherAmount_${idx}" placeholder="المبلغ" value="" inputmode="numeric" 
+                       data-teacher="${item.teacherName}" 
+                       data-category="${item.category || ''}" 
+                       data-grade="${item.grade || ''}"
+                       oninput="convertAmountToEnglish(this); updateMultiPaymentSummary();">
+                <span class="currency-label">جنيه</span>
+            </div>
+        </div>
+    `).join('');
+
+    const quickAmount = document.getElementById("quickUnifiedAmount");
+    if (quickAmount) quickAmount.focus();
+}
+
+/**
+ * عند تغيير حالة الـ Checkbox لمعلم
+ */
+function handleTeacherCheckChange(idx) {
+    const check = document.getElementById(`teacherCheck_${idx}`);
+    const card = document.getElementById(`teacherCard_${idx}`);
+    const amountInput = document.getElementById(`teacherAmount_${idx}`);
+
+    if (check && card) {
+        if (check.checked) {
+            card.classList.add('active');
+            if (amountInput) amountInput.disabled = false;
+        } else {
+            card.classList.remove('active');
+            if (amountInput) {
+                amountInput.disabled = true;
+            }
+        }
+    }
+    updateMultiPaymentSummary();
+}
+
+/**
+ * تحديد أو إلغاء تحديد جميع المدرسين
+ */
+function toggleSelectAllTeachers(select) {
+    currentStudentTeachers.forEach((_, idx) => {
+        const check = document.getElementById(`teacherCheck_${idx}`);
+        const card = document.getElementById(`teacherCard_${idx}`);
+        const amountInput = document.getElementById(`teacherAmount_${idx}`);
+        if (check) {
+            check.checked = select;
+            if (card) {
+                if (select) card.classList.add('active');
+                else card.classList.remove('active');
+            }
+            if (amountInput) amountInput.disabled = !select;
+        }
+    });
+    updateMultiPaymentSummary();
+}
+
+/**
+ * تطبيق مبلغ موحد على جميع المدرسين المحددين بنقرة واحدة
+ */
+function applyUnifiedAmountToSelected() {
+    const unifiedInput = document.getElementById("quickUnifiedAmount");
+    const val = unifiedInput ? unifiedInput.value.trim() : "";
+    if (!val || isNaN(val) || Number(val) <= 0) {
+        showToast("يرجى إدخال مبلغ صحيح لتطبيقه على المعلمين!", "warning");
+        if (unifiedInput) unifiedInput.focus();
+        return;
+    }
+
+    let appliedCount = 0;
+    currentStudentTeachers.forEach((_, idx) => {
+        const check = document.getElementById(`teacherCheck_${idx}`);
+        const amountInput = document.getElementById(`teacherAmount_${idx}`);
+        if (check && check.checked && amountInput) {
+            amountInput.value = val;
+            appliedCount++;
+        }
+    });
+
+    updateMultiPaymentSummary();
+    showToast(`تم تطبيق مبلغ ${val} جنيه على (${appliedCount}) معلمين بنجاح.`, "info");
+}
+
+/**
+ * تحديث شريط الملخص المالي اللحظي
+ */
+function updateMultiPaymentSummary() {
+    let total = 0;
+    let selectedCount = 0;
+
+    currentStudentTeachers.forEach((_, idx) => {
+        const check = document.getElementById(`teacherCheck_${idx}`);
+        const amountInput = document.getElementById(`teacherAmount_${idx}`);
+        if (check && check.checked) {
+            selectedCount++;
+            if (amountInput && amountInput.value) {
+                const amt = parseFloat(toEnglishNumerals(amountInput.value));
+                if (!isNaN(amt)) total += amt;
+            }
+        }
+    });
+
+    const countEl = document.getElementById("summarySelectedCount");
+    const totalEl = document.getElementById("summaryTotalAmount");
+    if (countEl) countEl.textContent = selectedCount;
+    if (totalEl) totalEl.textContent = total.toLocaleString('en-US');
+}
+
+/**
+ * التبديل اليدوي لاختيار مدرس فردي من القائمة العامة
+ */
+function switchToManualSingleTeacher() {
+    isMultiTeacherMode = false;
+    const multiContainer = document.getElementById("multiTeachersContainer");
+    const singleSection = document.getElementById("singleTeacherSection");
+    const manualSwitchRow = document.getElementById("manualSwitchBackRow");
+    const backCount = document.getElementById("backToTeachersCount");
+
+    if (multiContainer) multiContainer.style.display = "none";
+    if (singleSection) singleSection.style.display = "block";
+    if (manualSwitchRow) {
+        manualSwitchRow.style.display = "flex";
+        if (backCount) backCount.textContent = currentStudentTeachers.length;
+    }
+}
+
+/**
+ * العودة لقسم المعلمين المتعددين
+ */
+function reopenMultiTeachersSection() {
+    if (currentStudentTeachers.length > 1) {
+        isMultiTeacherMode = true;
+        const multiContainer = document.getElementById("multiTeachersContainer");
+        const singleSection = document.getElementById("singleTeacherSection");
+        const manualSwitchRow = document.getElementById("manualSwitchBackRow");
+
+        if (multiContainer) multiContainer.style.display = "block";
+        if (singleSection) singleSection.style.display = "none";
+        if (manualSwitchRow) manualSwitchRow.style.display = "none";
+    }
+}
+
+/* ===================================================
    تفعيل نظام الإكمال التلقائي الذكي لاسم الطالب
    =================================================== */
 function initStudentAutocomplete() {
@@ -474,70 +731,65 @@ function initStudentAutocomplete() {
 
         // تصفية الطلاب المطابقين لكلمة البحث بذكاء مع دعم الأسماء المركبة
         const normQuery = normalizeArabicName(query);
-        const matches = allStudentsList.filter(s => 
-            normalizeArabicName(s.studentName).includes(normQuery)
-        );
+        
+        // تجميع النتائج حسب اسم الطالب لحساب عدد مدرسيه
+        const studentsGroupMap = new Map();
+        allStudentsList.forEach(item => {
+            const normStudent = normalizeArabicName(item.studentName);
+            if (normStudent.includes(normQuery)) {
+                if (!studentsGroupMap.has(normStudent)) {
+                    studentsGroupMap.set(normStudent, {
+                        displayName: displayNormalizedName(item.studentName),
+                        records: []
+                    });
+                }
+                studentsGroupMap.get(normStudent).records.push(item);
+            }
+        });
 
-        if (matches.length === 0) {
+        const groups = Array.from(studentsGroupMap.values());
+
+        if (groups.length === 0) {
             dropdown.style.display = "none";
             dropdown.innerHTML = "";
             return;
         }
 
         // عرض أول 8 اقتراحات كحد أقصى لمنع ازدحام القائمة
-        const topMatches = matches.slice(0, 8);
-        dropdown.innerHTML = topMatches.map((s, idx) => `
+        const topMatches = groups.slice(0, 8);
+        dropdown.innerHTML = topMatches.map((group, idx) => {
+            const count = group.records.length;
+            const teachersText = group.records.map(r => r.teacherName).filter(Boolean).slice(0, 3).join('، ');
+            const moreText = count > 3 ? '...' : '';
+            return `
             <div class="autocomplete-item" data-idx="${idx}">
                 <div class="autocomplete-item-info">
-                    <strong><i class="fa-solid fa-user-check" style="color: #10b981; margin-left: 6px;"></i>${highlightMatch(displayNormalizedName(s.studentName), query)}</strong>
-                    <span><i class="fa-solid fa-chalkboard-user"></i> أ/ ${s.teacherName || 'غير محدد'} • <b style="color: #6366f1;">${s.category || ''}</b> (${s.grade || ''})</span>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <strong><i class="fa-solid fa-user-check" style="color: #10b981; margin-left: 6px;"></i>${highlightMatch(group.displayName, query)}</strong>
+                        <span style="background: rgba(99,102,241,0.12); color: #6366f1; padding: 2px 8px; border-radius: 12px; font-weight: 700; font-size: 11px;">
+                            ${count > 1 ? `<i class="fa-solid fa-users"></i> ${count} معلمين` : '<i class="fa-solid fa-user"></i> معلم واحد'}
+                        </span>
+                    </div>
+                    <span><i class="fa-solid fa-chalkboard-user"></i> مسجل مع: <b>${teachersText}${moreText}</b></span>
                 </div>
                 <i class="fa-solid fa-arrow-turn-down-left" style="color: #6366f1; font-size: 11px;"></i>
             </div>
-        `).join('');
+            `;
+        }).join('');
 
         dropdown.style.display = "block";
 
         // إضافة أحداث النقر لاختيار الطالب
         dropdown.querySelectorAll(".autocomplete-item").forEach(item => {
             item.addEventListener("click", function() {
-                const selected = topMatches[parseInt(this.getAttribute("data-idx"))];
-                if (!selected) return;
+                const selectedGroup = topMatches[parseInt(this.getAttribute("data-idx"))];
+                if (!selectedGroup) return;
 
-                input.value = displayNormalizedName(selected.studentName);
+                input.value = selectedGroup.displayName;
                 dropdown.style.display = "none";
 
-                // تعبئة المدرس والفئة والصف تلقائياً لتسهيل التجربة
-                if (selected.teacherName) {
-                    const teacherSel = document.getElementById("teacherSelect");
-                    if (teacherSel) {
-                        // التأكد من وجود المدرس في القائمة أو إضافته
-                        let found = Array.from(teacherSel.options).some(o => o.value === selected.teacherName);
-                        if (!found) {
-                            teacherSel.add(new Option(selected.teacherName, selected.teacherName));
-                        }
-                        teacherSel.value = selected.teacherName;
-                    }
-                }
-
-                if (selected.category) {
-                    const catSel = document.getElementById("categorySelect");
-                    if (catSel) {
-                        catSel.value = selected.category;
-                        updateGrades('categorySelect', 'gradeSelect');
-                    }
-                }
-
-                if (selected.grade) {
-                    const gradeSel = document.getElementById("gradeSelect");
-                    if (gradeSel) {
-                        gradeSel.value = selected.grade;
-                    }
-                }
-
-                // التركيز على خانة المبلغ
-                const amountInput = document.getElementById("amount");
-                if (amountInput) amountInput.focus();
+                // تجهيز واجهة المعلمين للطالب المختار سواء فردي أو متعدد
+                setupStudentTeachersUI(selectedGroup.displayName);
             });
         });
     });
@@ -608,14 +860,133 @@ async function addTransaction() {
     let sName = document.getElementById("studentName").value.trim();
     // توحيد الأسماء المركبة مثل عبد الله -> عبدالله
     sName = displayNormalizedName(sName);
+    const date = document.getElementById("dateTime").value;
+    const file = document.getElementById("receiptFile").files[0];
+
+    if (!sName || !date) {
+        showToast("يرجى كتابة اسم الطالب وتحديد تاريخ التحصيل!", "warning");
+        return;
+    }
+
+    // =========================================================
+    // 1. حالة التحصيل المجمع لأكثر من معلم (Multi-Teacher Mode)
+    // =========================================================
+    if (isMultiTeacherMode) {
+        const transactionsToPay = [];
+        let missingAmount = false;
+
+        currentStudentTeachers.forEach((item, idx) => {
+            const check = document.getElementById(`teacherCheck_${idx}`);
+            const amountInput = document.getElementById(`teacherAmount_${idx}`);
+
+            if (check && check.checked) {
+                const amt = amountInput ? toEnglishNumerals(amountInput.value.trim()) : "";
+                if (!amt || isNaN(amt) || Number(amt) <= 0) {
+                    missingAmount = true;
+                } else {
+                    transactionsToPay.push({
+                        studentName: sName,
+                        teacherName: item.teacherName,
+                        category: item.category || '',
+                        grade: item.grade || '',
+                        amount: amt,
+                        date: date
+                    });
+                }
+            }
+        });
+
+        if (transactionsToPay.length === 0) {
+            showToast("يرجى تحديد معلم واحد على الأقل للدفع له!", "warning");
+            return;
+        }
+
+        if (missingAmount) {
+            showToast("يرجى إدخال مبلغ صحيح لكل معلم تم تحديده!", "warning");
+            return;
+        }
+
+        showLoading(true);
+
+        const sendBulkData = async (b64, type, fname) => {
+            try {
+                // محاولة الإرسال كـ Bulk أولاً
+                let bulkSuccess = false;
+                try {
+                    const res = await enqueueTransaction(() =>
+                        fetchWithRetry(SCRIPT_URL, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                action: "addTransactionsBulk",
+                                transactions: transactionsToPay,
+                                fileBase64: b64,
+                                mimeType: type,
+                                fileName: fname
+                            })
+                        })
+                    );
+                    const resJson = await res.json();
+                    if (resJson && resJson.status === "success") {
+                        bulkSuccess = true;
+                    }
+                } catch (bulkErr) {
+                    console.warn("Bulk submission failed or unsupported, fallback to sequential queue", bulkErr);
+                }
+
+                // آلية Fallback الاحتياطية المتتابعة في حال كان سكريبت الخادم لم يُحدّث بعد
+                if (!bulkSuccess) {
+                    for (let i = 0; i < transactionsToPay.length; i++) {
+                        const tx = transactionsToPay[i];
+                        await enqueueTransaction(() =>
+                            fetchWithRetry(SCRIPT_URL, {
+                                method: 'POST',
+                                body: JSON.stringify({
+                                    action: "addTransaction",
+                                    studentName: tx.studentName,
+                                    teacherName: tx.teacherName,
+                                    category: tx.category,
+                                    grade: tx.grade,
+                                    amount: tx.amount,
+                                    date: tx.date,
+                                    // رفع الصورة في أول معاملة فقط لتوفير الموارد
+                                    fileBase64: (i === 0 ? b64 : ""),
+                                    mimeType: (i === 0 ? type : ""),
+                                    fileName: (i === 0 ? fname : "")
+                                })
+                            })
+                        );
+                    }
+                }
+
+                showToast(`تم بنجاح حفظ تحصيل (${transactionsToPay.length}) معلمين في الشيت!`, "success");
+                
+                // إعادة ضبط الحقول
+                resetPaymentForm();
+            } catch (e) {
+                showToast("حدث خطأ أثناء حفظ التحصيلات، يرجى المحاولة مرة أخرى.", "danger");
+            }
+            showLoading(false);
+        };
+
+        if (file) {
+            const r = new FileReader();
+            r.onload = e => sendBulkData(e.target.result.split(",")[1], file.type, file.name);
+            r.readAsDataURL(file);
+        } else {
+            sendBulkData("", "", "");
+        }
+        return;
+    }
+
+    // =========================================================
+    // 2. حالة التحصيل الفردي الكلاسيكية (Single-Teacher Mode)
+    // =========================================================
     const tName = document.getElementById("teacherSelect").value;
     const cat = document.getElementById("categorySelect").value;
     const grade = document.getElementById("gradeSelect").value;
     const amount = document.getElementById("amount").value;
-    const date = document.getElementById("dateTime").value;
-    const file = document.getElementById("receiptFile").files[0];
 
-    if (!sName || !tName || !cat || !grade || !amount || !date) {
+    if (!tName || !cat || !grade || !amount) {
         showToast("يرجى إكمال جميع البيانات المطلوبة للتحصيل!", "warning");
         return;
     }
@@ -624,7 +995,6 @@ async function addTransaction() {
 
     const sendData = async (b64, type, fname) => {
         try {
-            // الإرسال عبر الطابور لضمان الترتيب عند التزامن
             await enqueueTransaction(() =>
                 fetchWithRetry(SCRIPT_URL, {
                     method: 'POST',
@@ -643,12 +1013,7 @@ async function addTransaction() {
                 })
             );
             showToast("تم حفظ بيانات التحصيل بنجاح في الشيت!", "success");
-            ["studentName", "amount", "receiptFile", "categorySelect", "teacherSelect"].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.value = "";
-            });
-            setDefaultDateTime();
-            updateGrades('categorySelect', 'gradeSelect');
+            resetPaymentForm();
         } catch (e) {
             showToast("حدث خطأ أثناء حفظ التحصيل، يرجى المحاولة مرة أخرى.", "danger");
         }
@@ -662,6 +1027,31 @@ async function addTransaction() {
     } else {
         sendData("", "", "");
     }
+}
+
+/**
+ * دالة مساعدة لإعادة تعيين النموذج بعد الحفظ
+ */
+function resetPaymentForm() {
+    ["studentName", "amount", "receiptFile", "categorySelect", "teacherSelect", "quickUnifiedAmount"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+    });
+
+    // إخفاء حاوية المدرسين المتعددين
+    const multiContainer = document.getElementById("multiTeachersContainer");
+    const singleSection = document.getElementById("singleTeacherSection");
+    const manualSwitchRow = document.getElementById("manualSwitchBackRow");
+
+    if (multiContainer) multiContainer.style.display = "none";
+    if (singleSection) singleSection.style.display = "block";
+    if (manualSwitchRow) manualSwitchRow.style.display = "none";
+
+    currentStudentTeachers = [];
+    isMultiTeacherMode = false;
+
+    setDefaultDateTime();
+    updateGrades('categorySelect', 'gradeSelect');
 }
 
 async function clearTeacherDues() {

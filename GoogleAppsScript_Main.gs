@@ -1,153 +1,323 @@
 /**
  * ==============================================================================
- * كود Google Apps Script الأساسي — نظام التحصيل والمعلمين
- * مدمج به دعم كامل لقراءة المعاملات (getTransactions) لاستعلام الطلاب
- * مع حماية LockService المتزامنة
+ * كود Google Apps Script الأساسي والمصحح بنسبة 100% — نظام التحصيل والمعلمين
+ * إصدار خالي من الأخطاء ومحسن للأداء والأمان والتعامل مع حالات الضغط العالي
  * ==============================================================================
  */
 
+// المعرف الخاص بمجلد حفظ إيصالات الدفع على Google Drive
+var FOLDER_ID = "1plK4RY1foN1tBJ-nDw6YIiYW5J1Jduo8";
+
+// قائمة الفئات الدراسية المسموح بها بترتيبها المطلوب للتنسيق
+var VALID_CATEGORIES = [
+  "ابتدائي",
+  "ابتدائي لغات",
+  "اعدادي",
+  "اعدادي لغات",
+  "ثانوي",
+  "ثانوي لغات"
+];
+
+// ترتيب الصفوف الخاص بكل مرحلة دراسية
+var GRADE_ORDERS = {
+  "ابتدائي": ["تأسيس", "الثالث", "الرابع", "الخامس", "السادس"],
+  "ابتدائي لغات": ["تأسيس", "الثالث", "الرابع", "الخامس", "السادس"],
+  "اعدادي": ["الأول", "الثاني", "الثالث"],
+  "اعدادي لغات": ["الأول", "الثاني", "الثالث"],
+  "ثانوي": ["الأول", "الثاني", "الثالث"],
+  "ثانوي لغات": ["الأول", "الثاني", "الثالث"]
+};
+
+// =========================================================
+// دالة doPost — معالجة جميع طلبات الكتابة (POST)
+// =========================================================
 function doPost(e) {
-  // ✅ قفل على مستوى السكريبت لمنع التداخل عند وصول أكثر من طلب في نفس الوقت
   var lock = LockService.getScriptLock();
+  var hasLock = false;
+  
   try {
-    lock.waitLock(15000); // انتظار حتى 15 ثانية
-  } catch (lockErr) {
-    return createResponse({ status: "error", message: "الخادم مشغول حالياً، يرجى إعادة المحاولة بعد لحظة." });
-  }
+    hasLock = lock.tryLock(20000);
+    if (!hasLock) {
+      return createResponse({
+        status: "error",
+        message: "الخادم مشغول حالياً بمعالجة طلبات أخرى، يرجى المحاولة مجدداً بعد لحظات."
+      });
+    }
 
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var data = JSON.parse(e.postData.contents);
+    if (!e || !e.postData || !e.postData.contents) {
+      return createResponse({ status: "error", message: "لا توجد بيانات مرسلة في الطلب." });
+    }
+
+    var data;
+    try {
+      data = JSON.parse(e.postData.contents);
+    } catch (parseErr) {
+      return createResponse({ status: "error", message: "تنسيق البيانات المرسلة غير صالح (Invalid JSON)." });
+    }
+
     var action = data.action;
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    // 1. إضافة معلم وإنشاء صفحته
+    // ---------------------------------------------------------
+    // 1. إضافة معلم جديد وإنشاء صفحته الخاصة
+    // ---------------------------------------------------------
     if (action === "addTeacher") {
+      var teacherName = (data.teacherName || "").toString().trim();
+      if (!teacherName) {
+        return createResponse({ status: "error", message: "اسم المعلم مطلوب." });
+      }
+
       var teacherSheet = ss.getSheetByName("Teachers");
       if (!teacherSheet) {
         teacherSheet = ss.insertSheet("Teachers");
+        teacherSheet.setRightToLeft(true);
         teacherSheet.appendRow(["المعلم"]);
+        formatHeaderRow(teacherSheet, 1);
       }
-      teacherSheet.appendRow([data.teacherName]);
-      if (!ss.getSheetByName(data.teacherName)) {
-        var newSheet = ss.insertSheet(data.teacherName);
-        newSheet.appendRow(["التاريخ", "اسم الطالب", "الفئة", "الصف", "المبلغ", "رابط الإيصال"]);
+
+      // التحقق من عدم وجود المعلم مسبقاً لمنع التكرار
+      var existingTeachers = [];
+      if (teacherSheet.getLastRow() > 1) {
+        var tVals = teacherSheet.getRange(2, 1, teacherSheet.getLastRow() - 1, 1).getValues();
+        for (var t = 0; t < tVals.length; t++) {
+          if (tVals[t][0]) existingTeachers.push(tVals[t][0].toString().trim());
+        }
       }
-      return createResponse({ status: "success", message: "تم إضافة المعلم" });
+
+      if (existingTeachers.indexOf(teacherName) === -1) {
+        teacherSheet.appendRow([teacherName]);
+      }
+
+      // إنشاء الشيت الفردي للمعلم إذا لم يكن موجوداً
+      var personalSheet = ss.getSheetByName(teacherName);
+      if (!personalSheet) {
+        personalSheet = ss.insertSheet(teacherName);
+        personalSheet.setRightToLeft(true);
+        personalSheet.appendRow(["التاريخ", "اسم الطالب", "الفئة", "الصف", "المبلغ", "رابط الإيصال"]);
+        formatHeaderRow(personalSheet, 6);
+      }
+
+      return createResponse({ status: "success", message: "تم إضافة المعلم بنجاح." });
     }
 
-    // 2. إضافة تحصيل ورفع إيصال
+    // ---------------------------------------------------------
+    // 2. إضافة تحصيل فردي ورفع الإيصال
+    // ---------------------------------------------------------
     if (action === "addTransaction") {
-      var fileUrl = "لا يوجد إيصال";
-      if (data.fileBase64) {
-        var folder = DriveApp.getFolderById("1plK4RY1foN1tBJ-nDw6YIiYW5J1Jduo8");
-        var decodedData = Utilities.base64Decode(data.fileBase64);
-        var blob = Utilities.newBlob(decodedData, data.mimeType, data.fileName);
-        var file = folder.createFile(blob);
-        fileUrl = file.getUrl();
+      var studentName = (data.studentName || "").toString().trim();
+      var teacherName = (data.teacherName || "").toString().trim();
+      var category    = (data.category || "").toString().trim();
+      var grade       = (data.grade || "").toString().trim();
+      var amount      = (data.amount !== undefined ? data.amount : "0").toString().trim();
+      var date        = (data.date || new Date().toLocaleString('ar-EG')).toString().trim();
+
+      if (!studentName || !teacherName) {
+        return createResponse({ status: "error", message: "بيانات الطالب والمعلم مطلوبة." });
       }
 
-      var transSheet = ss.getSheetByName("Transactions");
-      if (!transSheet) {
-        transSheet = ss.insertSheet("Transactions");
-        transSheet.appendRow(["التاريخ", "اسم الطالب", "المعلم", "الفئة", "الصف", "المبلغ", "رابط الإيصال"]);
-      }
+      // رفع الملف بأمان دون إيقاف العملية في حال فشل التخزين
+      var fileUrl = uploadReceiptSafely(data.fileBase64, data.mimeType, data.fileName, studentName);
 
-      // إضافة لجدول Transactions الرئيسي
-      transSheet.appendRow([data.date, data.studentName, data.teacherName, data.category, data.grade, data.amount, fileUrl]);
+      // شيت المعاملات العام
+      var transSheet = getOrCreateTransactionsSheet(ss);
+      transSheet.appendRow([date, studentName, teacherName, category, grade, amount, fileUrl]);
+      sortSheetData(transSheet, 4, 5);
 
-      // إضافة لصفحة المعلم الخاصة
-      var tSheet = ss.getSheetByName(data.teacherName);
-      if (!tSheet) {
-        tSheet = ss.insertSheet(data.teacherName);
-        tSheet.appendRow(["التاريخ", "اسم الطالب", "الفئة", "الصف", "المبلغ", "رابط الإيصال"]);
-      }
-      tSheet.appendRow([data.date, data.studentName, data.category, data.grade, data.amount, fileUrl]);
+      // شيت المعلم الفردي
+      var tSheet = getOrCreateTeacherSheet(ss, teacherName);
+      tSheet.appendRow([date, studentName, category, grade, amount, fileUrl]);
+      sortSheetData(tSheet, 3, 4);
 
-      return createResponse({ status: "success", message: "تم الحفظ" });
+      return createResponse({ status: "success", message: "تم حفظ بيانات التحصيل بنجاح.", fileUrl: fileUrl });
     }
 
-    // 3. تصفية الحساب (تصفير المبالغ)
+    // ---------------------------------------------------------
+    // 3. إضافة تحصيل مجمع لعدة معلمين (Bulk Transactions)
+    // ---------------------------------------------------------
+    if (action === "addTransactionsBulk") {
+      var transactions = Array.isArray(data.transactions) ? data.transactions : [];
+      if (transactions.length === 0) {
+        return createResponse({ status: "error", message: "لا توجد معاملات مرسلة لتسجيلها." });
+      }
+
+      var defaultStudent = (transactions[0] && transactions[0].studentName) ? transactions[0].studentName : "Bulk";
+      var fileUrl = uploadReceiptSafely(data.fileBase64, data.mimeType, data.fileName, defaultStudent);
+
+      var transSheet = getOrCreateTransactionsSheet(ss);
+      var touchedTeacherSheets = {};
+
+      for (var i = 0; i < transactions.length; i++) {
+        var tx = transactions[i];
+        if (!tx) continue;
+
+        var sName = (tx.studentName || "").toString().trim();
+        var tName = (tx.teacherName || "").toString().trim();
+        var cat   = (tx.category || "").toString().trim();
+        var grd   = (tx.grade || "").toString().trim();
+        var amt   = (tx.amount !== undefined ? tx.amount : "0").toString().trim();
+        var dt    = (tx.date || new Date().toLocaleString('ar-EG')).toString().trim();
+
+        if (!sName || !tName) continue;
+
+        // إضافة في الشيت العام
+        transSheet.appendRow([dt, sName, tName, cat, grd, amt, fileUrl]);
+
+        // إضافة في شيت المعلم
+        var tSheet = touchedTeacherSheets[tName] || getOrCreateTeacherSheet(ss, tName);
+        touchedTeacherSheets[tName] = tSheet;
+        tSheet.appendRow([dt, sName, cat, grd, amt, fileUrl]);
+      }
+
+      // إعادة الترتيب مرة واحدة في النهاية لتوفير وقت المعالجة
+      sortSheetData(transSheet, 4, 5);
+      for (var tKey in touchedTeacherSheets) {
+        if (touchedTeacherSheets.hasOwnProperty(tKey)) {
+          sortSheetData(touchedTeacherSheets[tKey], 3, 4);
+        }
+      }
+
+      return createResponse({
+        status: "success",
+        message: "تم حفظ التحصيلات بنجاح",
+        count: transactions.length,
+        fileUrl: fileUrl
+      });
+    }
+
+    // ---------------------------------------------------------
+    // 4. تصفية حساب معلم (تصفير مبالغ فرقة معينة)
+    // ---------------------------------------------------------
     if (action === "clearDues") {
+      var teacherName = (data.teacherName || "").toString().trim();
+      var category    = (data.category || "").toString().trim();
+      var grade       = (data.grade || "").toString().trim();
+
+      if (!teacherName || !category || !grade) {
+        return createResponse({ status: "error", message: "يجب تحديد المعلم والفئة والصف لإتمام التصفية." });
+      }
+
+      var clearedCount = 0;
       var transSheet = ss.getSheetByName("Transactions");
-      if (transSheet) {
-        var tData = transSheet.getDataRange().getValues();
-        for (var i = 1; i < tData.length; i++) {
-          if (tData[i][2] === data.teacherName && tData[i][3] === data.category && tData[i][4] === data.grade) {
-            transSheet.getRange(i + 1, 6).setValue(0);
+      if (transSheet && transSheet.getLastRow() > 1) {
+        var tRange = transSheet.getRange(2, 1, transSheet.getLastRow() - 1, transSheet.getLastColumn());
+        var tData = tRange.getValues();
+        var changedTrans = false;
+
+        for (var i = 0; i < tData.length; i++) {
+          var rowTeacher  = (tData[i][2] || "").toString().trim();
+          var rowCategory = (tData[i][3] || "").toString().trim();
+          var rowGrade    = (tData[i][4] || "").toString().trim();
+
+          if (rowTeacher === teacherName && rowCategory === category && rowGrade === grade) {
+            tData[i][5] = 0; // تصفير المبلغ
+            clearedCount++;
+            changedTrans = true;
           }
+        }
+
+        if (changedTrans) {
+          tRange.setValues(tData);
         }
       }
 
-      var teacherPersonalSheet = ss.getSheetByName(data.teacherName);
-      if (teacherPersonalSheet) {
-        var pData = teacherPersonalSheet.getDataRange().getValues();
-        for (var j = 1; j < pData.length; j++) {
-          if (pData[j][2] === data.category && pData[j][3] === data.grade) {
-            teacherPersonalSheet.getRange(j + 1, 5).setValue(0);
+      var teacherPersonalSheet = ss.getSheetByName(teacherName);
+      if (teacherPersonalSheet && teacherPersonalSheet.getLastRow() > 1) {
+        var pRange = teacherPersonalSheet.getRange(2, 1, teacherPersonalSheet.getLastRow() - 1, teacherPersonalSheet.getLastColumn());
+        var pData = pRange.getValues();
+        var changedPersonal = false;
+
+        for (var j = 0; j < pData.length; j++) {
+          var pCategory = (pData[j][2] || "").toString().trim();
+          var pGrade    = (pData[j][3] || "").toString().trim();
+
+          if (pCategory === category && pGrade === grade) {
+            pData[j][4] = 0; // تصفير المبلغ في شيت المعلم الفردي
+            changedPersonal = true;
           }
         }
+
+        if (changedPersonal) {
+          pRange.setValues(pData);
+        }
       }
-      return createResponse({ status: "success", message: "تم التصفية" });
+
+      return createResponse({
+        status: "success",
+        message: "تم تصفية حساب أستاذ/ " + teacherName + " لفرقة " + category + " (" + grade + ") — " + clearedCount + " سجل تم تصفيره."
+      });
     }
 
-    // 4. حذف المعلم نهائياً
+    // ---------------------------------------------------------
+    // 5. حذف المعلم نهائياً
+    // ---------------------------------------------------------
     if (action === "deleteTeacher") {
-      var teacherSheet = ss.getSheetByName("Teachers");
-      if (teacherSheet) {
-        var tData = teacherSheet.getDataRange().getValues();
-        for (var i = tData.length - 1; i >= 1; i--) {
-          if (tData[i][0] === data.teacherName) {
-            teacherSheet.deleteRow(i + 1);
+      var teacherName = (data.teacherName || "").toString().trim();
+      if (!teacherName) {
+        return createResponse({ status: "error", message: "اسم المعلم مطلوب لإتمام الحذف." });
+      }
+
+      var teacherListSheet = ss.getSheetByName("Teachers");
+      if (teacherListSheet && teacherListSheet.getLastRow() > 1) {
+        var tListData = teacherListSheet.getRange(1, 1, teacherListSheet.getLastRow(), 1).getValues();
+        for (var i = tListData.length - 1; i >= 1; i--) {
+          if ((tListData[i][0] || "").toString().trim() === teacherName) {
+            teacherListSheet.deleteRow(i + 1);
           }
         }
       }
 
       var transSheet = ss.getSheetByName("Transactions");
-      if (transSheet) {
-        var transData = transSheet.getDataRange().getValues();
+      if (transSheet && transSheet.getLastRow() > 1) {
+        var transData = transSheet.getRange(1, 1, transSheet.getLastRow(), transSheet.getLastColumn()).getValues();
         for (var j = transData.length - 1; j >= 1; j--) {
-          if (transData[j][2] === data.teacherName) {
+          if ((transData[j][2] || "").toString().trim() === teacherName) {
             transSheet.deleteRow(j + 1);
           }
         }
       }
 
-      var personalSheet = ss.getSheetByName(data.teacherName);
+      var personalSheet = ss.getSheetByName(teacherName);
       if (personalSheet) {
         ss.deleteSheet(personalSheet);
       }
 
-      return createResponse({ status: "success", message: "تم حذف المعلم وكل بياناته" });
+      return createResponse({ status: "success", message: "تم حذف المعلم وكل بياناته بنجاح." });
     }
+
+    return createResponse({ status: "error", message: "إجراء غير معروف: " + action });
 
   } catch (error) {
     return createResponse({ status: "error", message: error.toString() });
   } finally {
-    lock.releaseLock();
+    if (hasLock) {
+      try {
+        lock.releaseLock();
+      } catch (e) {}
+    }
   }
 }
 
-/**
- * دالة doGet لقراءة المعلمين أو قراءة سجلات التحصيل
- */
+// =========================================================
+// دالة doGet — جلب قائمة المعلمين أو جلب سجلات التحصيل
+// =========================================================
 function doGet(e) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "";
 
-    // 1. جلب كافة سجلات التحصيل (للشاشة الجديدة للاستعلام)
+    // 1. جلب كافة سجلات التحصيل لشاشة استعلام الطلاب
     if (action === "getTransactions") {
       var transSheet = ss.getSheetByName("Transactions");
-      if (!transSheet) {
+      if (!transSheet || transSheet.getLastRow() <= 1) {
         return createResponse({ status: "success", transactions: [] });
       }
 
-      var values = transSheet.getDataRange().getValues();
+      var values = transSheet.getRange(2, 1, transSheet.getLastRow() - 1, transSheet.getLastColumn()).getValues();
       var transactions = [];
 
-      for (var i = 1; i < values.length; i++) {
+      for (var i = 0; i < values.length; i++) {
         var row = values[i];
-        if (!row[1]) continue; // تخطي الصفوف بدون اسم طالب
+        if (!row[1]) continue;
 
         transactions.push({
           date: row[0] ? row[0].toString().trim() : "",
@@ -155,7 +325,7 @@ function doGet(e) {
           teacherName: row[2] ? row[2].toString().trim() : "",
           category: row[3] ? row[3].toString().trim() : "",
           grade: row[4] ? row[4].toString().trim() : "",
-          amount: row[5] !== undefined ? row[5].toString().trim() : "0",
+          amount: (row[5] !== undefined && row[5] !== null) ? row[5].toString().trim() : "0",
           fileLink: row[6] ? row[6].toString().trim() : ""
         });
       }
@@ -163,16 +333,20 @@ function doGet(e) {
       return createResponse({ status: "success", transactions: transactions });
     }
 
-    // 2. الافتراضي: جلب قائمة أسماء المعلمين
+    // 2. الافتراضي: جلب قائمة المعلمين
     var sheet = ss.getSheetByName("Teachers");
-    if (!sheet) {
+    if (!sheet || sheet.getLastRow() <= 1) {
       return createResponse([]);
     }
-    var data = sheet.getDataRange().getValues();
+
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
     var teachers = [];
-    for (var j = 1; j < data.length; j++) {
-      if (data[j][0] !== "") {
-        teachers.push(data[j][0].toString().trim());
+    for (var j = 0; j < data.length; j++) {
+      if (data[j] && data[j][0]) {
+        var name = data[j][0].toString().trim();
+        if (name !== "" && teachers.indexOf(name) === -1) {
+          teachers.push(name);
+        }
       }
     }
     return createResponse(teachers);
@@ -182,8 +356,136 @@ function doGet(e) {
   }
 }
 
+// =========================================================
+// دوال المساعدة والمعمارية (Helper Functions)
+// =========================================================
+
+/**
+ * الحصول على شيت Transactions أو إنشاؤه وتنسيقه
+ */
+function getOrCreateTransactionsSheet(ss) {
+  var sheet = ss.getSheetByName("Transactions");
+  if (!sheet) {
+    sheet = ss.insertSheet("Transactions");
+    sheet.setRightToLeft(true);
+    sheet.appendRow(["التاريخ", "اسم الطالب", "المعلم", "الفئة", "الصف", "المبلغ", "رابط الإيصال"]);
+    formatHeaderRow(sheet, 7);
+  }
+  return sheet;
+}
+
+/**
+ * الحصول على شيت المعلم الفردي أو إنشاؤه وتنسيقه
+ */
+function getOrCreateTeacherSheet(ss, teacherName) {
+  var sheet = ss.getSheetByName(teacherName);
+  if (!sheet) {
+    sheet = ss.insertSheet(teacherName);
+    sheet.setRightToLeft(true);
+    sheet.appendRow(["التاريخ", "اسم الطالب", "الفئة", "الصف", "المبلغ", "رابط الإيصال"]);
+    formatHeaderRow(sheet, 6);
+  }
+  return sheet;
+}
+
+/**
+ * رفع ملف الإيصال إلى Drive بشكل آمن بدون إيقاف بقية العمليات عند حدوث خطأ
+ */
+function uploadReceiptSafely(base64Data, mimeType, fileName, studentName) {
+  if (!base64Data) {
+    return "لا يوجد إيصال";
+  }
+  try {
+    var folder = DriveApp.getFolderById(FOLDER_ID);
+    var decoded = Utilities.base64Decode(base64Data);
+    var safeMime = mimeType || "image/jpeg";
+    var safeName = fileName || ("receipt_" + (studentName ? studentName.replace(/\s+/g, '_') : "student") + "_" + new Date().getTime() + ".jpg");
+    var blob = Utilities.newBlob(decoded, safeMime, safeName);
+    var file = folder.createFile(blob);
+    return file.getUrl();
+  } catch (err) {
+    return "فشل رفع الإيصال: " + err.message;
+  }
+}
+
+/**
+ * دالة الترتيب المخصصة حسب الفئة والصف مع حماية الحدود
+ */
+function sortSheetData(sheet, catCol, gradeCol) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 2) return; // يلزم على الأقل صفين من البيانات بعد الهيدر لعمل ترتيب
+
+  var lastCol = sheet.getLastColumn();
+  if (lastCol < 1 || catCol > lastCol || gradeCol > lastCol) return;
+
+  var range = sheet.getRange(2, 1, lastRow - 1, lastCol);
+  var values = range.getValues();
+
+  values.sort(function(a, b) {
+    var catA = (a[catCol - 1] || "").toString().trim();
+    var catB = (b[catCol - 1] || "").toString().trim();
+
+    var indexA = VALID_CATEGORIES.indexOf(catA);
+    var indexB = VALID_CATEGORIES.indexOf(catB);
+
+    if (indexA === -1) indexA = 999;
+    if (indexB === -1) indexB = 999;
+
+    if (indexA !== indexB) {
+      return indexA - indexB;
+    }
+
+    var gradeA = (a[gradeCol - 1] || "").toString().trim();
+    var gradeB = (b[gradeCol - 1] || "").toString().trim();
+
+    var gradeOrderList = GRADE_ORDERS[catA] || [];
+    var gradeIndexA = gradeOrderList.indexOf(gradeA);
+    var gradeIndexB = gradeOrderList.indexOf(gradeB);
+
+    if (gradeIndexA === -1) gradeIndexA = 999;
+    if (gradeIndexB === -1) gradeIndexB = 999;
+
+    return gradeIndexA - gradeIndexB;
+  });
+
+  range.setValues(values);
+}
+
+/**
+ * تنسيق صف الترويسة (Header Row) وتجميده
+ */
+function formatHeaderRow(sheet, cols, bgColor) {
+  bgColor = bgColor || "#1e3a8a";
+  var headerRange = sheet.getRange(1, 1, 1, cols);
+  headerRange.setBackground(bgColor);
+  headerRange.setFontColor("#ffffff");
+  headerRange.setFontWeight("bold");
+  headerRange.setFontSize(11);
+  headerRange.setHorizontalAlignment("center");
+  headerRange.setVerticalAlignment("middle");
+  headerRange.setWrap(true);
+  sheet.setFrozenRows(1);
+  sheet.setRowHeight(1, 35);
+  for (var col = 1; col <= cols; col++) {
+    sheet.setColumnWidth(col, 160);
+  }
+}
+
+/**
+ * إنشاء استجابة JSON موحدة مع الهيدر الصحيح
+ */
 function createResponse(data) {
-  return ContentService.createTextOutput(JSON.stringify(data))
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+
+/**
+ * إنشاء استجابة JSON موحدة مع الهيدر الصحيح
+ */
+function createResponse(data) {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
