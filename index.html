@@ -169,6 +169,12 @@
             <p>يرجى تحويل المبلغ المطلوب إلى رقم المحفظة التالي:</p>
         </div>
         <div class="payment-modal-body">
+            <!-- صندوق عرض المبلغ المطلوب تحويله بدقة -->
+            <div class="modal-required-amount-badge">
+                <span class="required-amount-label">المبلغ المطلوب تحويله:</span>
+                <span id="vodafoneRequiredAmount" class="required-amount-val">0 ج.م</span>
+            </div>
+
             <!-- صندوق رقم التحويل -->
             <div class="transfer-number-card">
                 <span class="transfer-label">رقم التحويل :</span>
@@ -286,11 +292,8 @@
                     <button type="button" class="btn-chip" onclick="toggleSelectAllTeachers(true)" title="تحديد جميع معلمي الطالب">
                         <i class="fa-solid fa-check-double"></i> تحديد الكل
                     </button>
-                    <button type="button" class="btn-chip btn-chip-outline" onclick="toggleSelectAllTeachers(false)" title="إلغاء تحديد الكل">
-                        <i class="fa-solid fa-xmark"></i> إلغاء
-                    </button>
-                    <button type="button" class="btn-chip btn-chip-switch" onclick="switchToManualSingleTeacher()" title="التبديل إلى اختيار مدرس يدوي من القائمة">
-                        <i class="fa-solid fa-repeat"></i> اختيار يدوي
+                    <button type="button" class="btn-chip btn-chip-outline" onclick="cancelMultiAndReturnToSingle()" title="إلغاء الدفع الجماعي والرجوع للدفع الفردي">
+                        <i class="fa-solid fa-arrow-rotate-left"></i> إلغاء الدفع الجماعي (رجوع للدفع الفردي)
                     </button>
                 </div>
             </div>

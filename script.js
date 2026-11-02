@@ -223,6 +223,28 @@ function closeAdminLoginModal() {
 /* ===================================================
    إدارة نوافذ الدفع الإلكتروني (انستا باي وفودافون كاش)
    =================================================== */
+function calculateCurrentRequiredTotal() {
+    if (isMultiTeacherMode) {
+        let total = 0;
+        currentStudentTeachers.forEach((_, idx) => {
+            const check = document.getElementById(`teacherCheck_${idx}`);
+            const amountInput = document.getElementById(`teacherAmount_${idx}`);
+            if (check && check.checked && amountInput && amountInput.value) {
+                const amt = parseFloat(toEnglishNumerals(amountInput.value));
+                if (!isNaN(amt)) total += amt;
+            }
+        });
+        return total;
+    } else {
+        const amtInput = document.getElementById("amount");
+        if (amtInput && amtInput.value) {
+            const amt = parseFloat(toEnglishNumerals(amtInput.value));
+            return isNaN(amt) ? 0 : amt;
+        }
+        return 0;
+    }
+}
+
 function openInstapayModal() {
     const modal = document.getElementById('instapayModal');
     if (modal) modal.style.display = 'flex';
@@ -235,7 +257,15 @@ function closeInstapayModal() {
 
 function openVodafoneModal() {
     const modal = document.getElementById('vodafoneModal');
-    if (modal) modal.style.display = 'flex';
+    if (modal) {
+        // تحديث إجمالي المبلغ المطلوب دفعه في النافذة
+        const reqEl = document.getElementById('vodafoneRequiredAmount');
+        if (reqEl) {
+            const total = calculateCurrentRequiredTotal();
+            reqEl.textContent = total > 0 ? `${total.toLocaleString('en-US')} ج.م` : "غير محدد بعد";
+        }
+        modal.style.display = 'flex';
+    }
 }
 
 function closeVodafoneModal() {
@@ -461,16 +491,31 @@ async function loadStudentsDatabase() {
    =================================================== */
 let currentStudentTeachers = []; // قائمة مدرسي الطالب المختار
 let isMultiTeacherMode = false;  // حالة تفعيل التحصيل المجمع
+let currentSelectedStudentMeta = null; // بيانات الطالب المختار المحددة بدقة { studentName, category, grade }
 
 /**
- * جلب جميع المدرسين المسجلين لطالب معين من قاعدة البيانات
+ * جلب جميع المدرسين المسجلين لطالب معين بدقة:
+ * المطابقة تتم بناءً على: (اسم الطالب + الفئة الدراسية + الصف الدراسي)
+ * لمنع تداخل الطلاب المتشابهين في الأسماء عبر المراحل والصفوف المختلفة
  */
-function getTeachersForStudent(studentName) {
+function getTeachersForStudent(studentName, category, grade) {
     if (!studentName) return [];
     const norm = normalizeArabicName(studentName);
-    const matches = allStudentsList.filter(s => normalizeArabicName(s.studentName) === norm);
+    const normCat = (category || '').trim();
+    const normGrd = (grade || '').trim();
+
+    const matches = allStudentsList.filter(s => {
+        const matchName = normalizeArabicName(s.studentName) === norm;
+        if (!matchName) return false;
+        
+        // إذا تم تمرير الفئة والصف، يجب تطابقهما بدقة متناهية
+        if (normCat && (s.category || '').trim() !== normCat) return false;
+        if (normGrd && (s.grade || '').trim() !== normGrd) return false;
+        
+        return true;
+    });
     
-    // استبعاد التكرارات لنفس المدرس
+    // استبعاد التكرارات لنفس المدرس في نفس الفرقة
     const uniqueMap = new Map();
     matches.forEach(item => {
         const t = (item.teacherName || '').trim();
@@ -482,9 +527,9 @@ function getTeachersForStudent(studentName) {
 }
 
 /**
- * عرض كروت المدرسين التفاعلية عند اختيار الطالب
+ * عرض كروت المدرسين التفاعلية عند اختيار الطالب المحدد (اسماً وفئةً وصفاً)
  */
-function setupStudentTeachersUI(studentName) {
+function setupStudentTeachersUI(studentName, category, grade) {
     const multiContainer = document.getElementById("multiTeachersContainer");
     const singleSection = document.getElementById("singleTeacherSection");
     const manualSwitchRow = document.getElementById("manualSwitchBackRow");
@@ -493,15 +538,16 @@ function setupStudentTeachersUI(studentName) {
     
     if (!multiContainer || !listEl) return;
 
-    currentStudentTeachers = getTeachersForStudent(studentName);
+    currentSelectedStudentMeta = { studentName, category, grade };
+    currentStudentTeachers = getTeachersForStudent(studentName, category, grade);
 
-    // إذا كان الطالب مسجلاً لدى أكثر من مدرس
+    // إذا كان الطالب مسجلاً لدى أكثر من مدرس في هذه المرحلة والصف
     if (currentStudentTeachers.length > 1) {
         isMultiTeacherMode = true;
         multiContainer.style.display = "block";
         if (singleSection) singleSection.style.display = "none";
         if (manualSwitchRow) manualSwitchRow.style.display = "none";
-        if (countBadge) countBadge.textContent = `${currentStudentTeachers.length} معلمين`;
+        if (countBadge) countBadge.textContent = `${currentStudentTeachers.length} معلمين • (${category} - ${grade})`;
 
         // رسم كروت المعلمين
         renderMultiTeacherCards(currentStudentTeachers);
@@ -514,14 +560,49 @@ function setupStudentTeachersUI(studentName) {
         if (manualSwitchRow) manualSwitchRow.style.display = "none";
 
         const single = currentStudentTeachers[0];
-        fillSingleTeacherFields(single.teacherName, single.category, single.grade);
+        fillSingleTeacherFields(single.teacherName, single.category || category, single.grade || grade);
     } else {
-        // طالب غير مسجل مسبقاً (زائر): الاعتماد على النمط اليدوي
+        // طالب غير مسجل مسبقاً (زائر): الاعتماد على النمط الفردي
         isMultiTeacherMode = false;
         multiContainer.style.display = "none";
         if (singleSection) singleSection.style.display = "block";
         if (manualSwitchRow) manualSwitchRow.style.display = "none";
+
+        if (category || grade) {
+            fillSingleTeacherFields("", category, grade);
+        }
     }
+}
+
+/**
+ * إلغاء الدفع الجماعي والرجوع فوراً للدفع الفردي مع تعبئة بيانات الطالب والمدرس الأول
+ */
+function cancelMultiAndReturnToSingle() {
+    isMultiTeacherMode = false;
+    const multiContainer = document.getElementById("multiTeachersContainer");
+    const singleSection = document.getElementById("singleTeacherSection");
+    const manualSwitchRow = document.getElementById("manualSwitchBackRow");
+    const backCount = document.getElementById("backToTeachersCount");
+
+    if (multiContainer) multiContainer.style.display = "none";
+    if (singleSection) singleSection.style.display = "block";
+    
+    // إتاحة زر الرجوع للدفع الجماعي إن رغب
+    if (manualSwitchRow) {
+        manualSwitchRow.style.display = "flex";
+        if (backCount) backCount.textContent = currentStudentTeachers.length;
+    }
+
+    // تعبئة الفئة والصف الدراسي للطالب تلقائياً في القسم الفردي
+    if (currentSelectedStudentMeta) {
+        fillSingleTeacherFields(
+            (currentStudentTeachers.length > 0 ? currentStudentTeachers[0].teacherName : ""),
+            currentSelectedStudentMeta.category,
+            currentSelectedStudentMeta.grade
+        );
+    }
+
+    showToast("تم إلغاء الدفع الجماعي والتحويل للدفع الفردي.", "info");
 }
 
 /**
@@ -715,6 +796,7 @@ function reopenMultiTeachersSection() {
 
 /* ===================================================
    تفعيل نظام الإكمال التلقائي الذكي لاسم الطالب
+   يفصل بين الطلاب المتشابهين في الاسم حسب الفئة والصف الدراسي
    =================================================== */
 function initStudentAutocomplete() {
     const input = document.getElementById("studentName");
@@ -732,18 +814,25 @@ function initStudentAutocomplete() {
         // تصفية الطلاب المطابقين لكلمة البحث بذكاء مع دعم الأسماء المركبة
         const normQuery = normalizeArabicName(query);
         
-        // تجميع النتائج حسب اسم الطالب لحساب عدد مدرسيه
+        // تجميع النتائج حسب المفتاح الفريد: (اسم الطالب + الفئة الدراسية + الصف الدراسي)
+        // لمنع تداخل الطلاب الذين يحملون نفس الاسم في صفوف أو مراحل مختلفة!
         const studentsGroupMap = new Map();
         allStudentsList.forEach(item => {
             const normStudent = normalizeArabicName(item.studentName);
             if (normStudent.includes(normQuery)) {
-                if (!studentsGroupMap.has(normStudent)) {
-                    studentsGroupMap.set(normStudent, {
+                const cat = (item.category || '').trim();
+                const grd = (item.grade || '').trim();
+                const uniqueStudentKey = `${normStudent}___${cat}___${grd}`;
+
+                if (!studentsGroupMap.has(uniqueStudentKey)) {
+                    studentsGroupMap.set(uniqueStudentKey, {
                         displayName: displayNormalizedName(item.studentName),
+                        category: cat,
+                        grade: grd,
                         records: []
                     });
                 }
-                studentsGroupMap.get(normStudent).records.push(item);
+                studentsGroupMap.get(uniqueStudentKey).records.push(item);
             }
         });
 
@@ -758,9 +847,11 @@ function initStudentAutocomplete() {
         // عرض أول 8 اقتراحات كحد أقصى لمنع ازدحام القائمة
         const topMatches = groups.slice(0, 8);
         dropdown.innerHTML = topMatches.map((group, idx) => {
-            const count = group.records.length;
+            // المعلمون المسجلون مع هذا الطالب في هذه المرحلة والصف فقط
             const teachersText = group.records.map(r => r.teacherName).filter(Boolean).slice(0, 3).join('، ');
-            const moreText = count > 3 ? '...' : '';
+            const moreText = group.records.length > 3 ? '...' : '';
+            const count = group.records.length;
+
             return `
             <div class="autocomplete-item" data-idx="${idx}">
                 <div class="autocomplete-item-info">
@@ -770,7 +861,12 @@ function initStudentAutocomplete() {
                             ${count > 1 ? `<i class="fa-solid fa-users"></i> ${count} معلمين` : '<i class="fa-solid fa-user"></i> معلم واحد'}
                         </span>
                     </div>
-                    <span><i class="fa-solid fa-chalkboard-user"></i> مسجل مع: <b>${teachersText}${moreText}</b></span>
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 3px; font-size: 12px;">
+                        <span style="color: var(--text-muted);"><i class="fa-solid fa-chalkboard-user"></i> معلموه: <b style="color: var(--text-title);">${teachersText}${moreText}</b></span>
+                        <span style="background: rgba(16,185,129,0.12); color: #059669; padding: 2px 8px; border-radius: 8px; font-weight: 700; font-size: 11.5px;">
+                            <i class="fa-solid fa-graduation-cap"></i> ${group.category} - ${group.grade}
+                        </span>
+                    </div>
                 </div>
                 <i class="fa-solid fa-arrow-turn-down-left" style="color: #6366f1; font-size: 11px;"></i>
             </div>
@@ -779,7 +875,7 @@ function initStudentAutocomplete() {
 
         dropdown.style.display = "block";
 
-        // إضافة أحداث النقر لاختيار الطالب
+        // إضافة أحداث النقر لاختيار الطالب المحدد بمرحلته وصفه
         dropdown.querySelectorAll(".autocomplete-item").forEach(item => {
             item.addEventListener("click", function() {
                 const selectedGroup = topMatches[parseInt(this.getAttribute("data-idx"))];
@@ -788,8 +884,8 @@ function initStudentAutocomplete() {
                 input.value = selectedGroup.displayName;
                 dropdown.style.display = "none";
 
-                // تجهيز واجهة المعلمين للطالب المختار سواء فردي أو متعدد
-                setupStudentTeachersUI(selectedGroup.displayName);
+                // تجهيز واجهة المعلمين للطالب المختار حصرًا في مرحلته وصفه الدراسي!
+                setupStudentTeachersUI(selectedGroup.displayName, selectedGroup.category, selectedGroup.grade);
             });
         });
     });
