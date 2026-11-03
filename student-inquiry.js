@@ -670,20 +670,34 @@ function selectStudent(studentName, targetCategory = null, targetGrade = null) {
             `;
         } else {
             // ترتيب الدفعات حسب التاريخ
-            paymentsHtml = teacherData.payments.map(p => {
+            paymentsHtml = teacherData.payments.map((p, pIdx) => {
                 const dateText = formatPaymentDate(p.date);
                 const monthName = extractMonthName(p.date);
                 const hasReceipt = p.fileLink && p.fileLink !== "لا يوجد إيصال" && p.fileLink.startsWith("http");
 
+                // تشفير بيانات الدفعة لتمريرها لدالة الحذف
+                const txDataStr = encodeURIComponent(JSON.stringify({
+                    studentName: p.studentName || studentName,
+                    teacherName: teacherData.teacherName,
+                    category: teacherData.category || '',
+                    grade: teacherData.grade || '',
+                    amount: p.amount,
+                    date: p.date
+                }));
+
                 return `
-                    <div class="month-item">
+                    <div class="month-item" id="txRow_${pIdx}">
                         <div class="month-info">
                             <i class="fa-solid fa-calendar-check"></i>
                             <span>${monthName} (${dateText})</span>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 8px;">
+                        <div class="month-actions">
                             <span class="month-amount">${p.amount} ج.م</span>
                             ${hasReceipt ? `<a href="${p.fileLink}" target="_blank" class="receipt-link-btn" title="عرض الإيصال"><i class="fa-solid fa-receipt"></i> الإيصال</a>` : ''}
+                            <button type="button" class="btn-delete-payment" onclick="confirmAndDeletePayment('${txDataStr}', this)" title="حذف هذه الدفعة (إذا تم التسجيل بالخطأ أو مكرر)">
+                                <i class="fa-solid fa-trash-can"></i>
+                                <span>حذف</span>
+                            </button>
                         </div>
                     </div>
                 `;
@@ -812,4 +826,85 @@ function highlightMatch(text, query) {
     if (!query) return text;
     const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
     return text.replace(regex, '<span style="color: #6366f1; text-decoration: underline; font-weight: 800;">$1</span>');
+}
+
+/* ===================================================
+   حذف دفعة التحصيل من شيت التحصيل وشيت المدرس
+   =================================================== */
+async function confirmAndDeletePayment(encodedData, btnElement) {
+    let tx;
+    try {
+        tx = JSON.parse(decodeURIComponent(encodedData));
+    } catch (e) {
+        showToast("خطأ في قراءة بيانات الدفعة المراد حذفها.", "danger");
+        return;
+    }
+
+    const confirmMsg = `⚠️ تأكيد حذف الدفعة:\n\n• الطالب: ${displayNormalizedName(tx.studentName)}\n• المعلم: أ/ ${tx.teacherName}\n• المبلغ: ${tx.amount} ج.م\n• التاريخ: ${formatPaymentDate(tx.date)}\n\nهل أنت متأكد من حذف هذه الدفعة نهائياً؟\nسيتم مسحها من شيت التحصيل العام ومن صفحة المعلم.`;
+
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    // تفعيل حالة التحميل للزر لمنع الضغط المتكرر
+    const originalBtnHtml = btnElement ? btnElement.innerHTML : "";
+    if (btnElement) {
+        btnElement.classList.add("deleting");
+        btnElement.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>جاري الحذف...</span>`;
+    }
+
+    showToast("جاري حذف الدفعة من الشيت وقاعدة البيانات...", "info");
+
+    try {
+        const response = await fetch(TRANSACTIONS_URL, {
+            method: "POST",
+            body: JSON.stringify({
+                action: "deleteTransaction",
+                studentName: tx.studentName,
+                teacherName: tx.teacherName,
+                category: tx.category,
+                grade: tx.grade,
+                amount: tx.amount,
+                date: tx.date
+            })
+        });
+
+        const result = await response.json();
+
+        if (result && (result.status === "success" || result.status === "warning")) {
+            showToast(result.message || "تم حذف الدفعة بنجاح!", result.status === "success" ? "success" : "warning");
+
+            // حذف المعاملة محلياً من مصفوفة allTransactions
+            const normStudent = normalizeArabicName(tx.studentName);
+            const idx = allTransactions.findIndex(t =>
+                normalizeArabicName(t.studentName) === normStudent &&
+                (t.teacherName || "").trim() === (tx.teacherName || "").trim() &&
+                String(t.amount).trim() === String(tx.amount).trim() &&
+                (!tx.date || (t.date || "").trim() === (tx.date || "").trim())
+            );
+
+            if (idx !== -1) {
+                allTransactions.splice(idx, 1);
+                localStorage.setItem("center_txs_cache", JSON.stringify(allTransactions));
+            }
+
+            // إعادة رسم بطاقة الطالب والمدفوعات فوراً
+            if (currentSelectedStudent) {
+                selectStudent(currentSelectedStudent.name, currentSelectedStudent.category, currentSelectedStudent.grade);
+            }
+        } else {
+            showToast(result.message || "حدث خطأ أثناء محاولة الحذف من الخادم.", "danger");
+            if (btnElement) {
+                btnElement.classList.remove("deleting");
+                btnElement.innerHTML = originalBtnHtml;
+            }
+        }
+    } catch (err) {
+        console.error("Delete payment error:", err);
+        showToast("فشل الاتصال بالخادم أثناء الحذف. يرجى المحاولة مرة أخرى.", "danger");
+        if (btnElement) {
+            btnElement.classList.remove("deleting");
+            btnElement.innerHTML = originalBtnHtml;
+        }
+    }
 }

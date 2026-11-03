@@ -284,6 +284,106 @@ function doPost(e) {
       return createResponse({ status: "success", message: "تم حذف المعلم وكل بياناته بنجاح." });
     }
 
+    // ---------------------------------------------------------
+    // 6. حذف دفعة تحصيل محددة (معكوسة في Transactions وشيت المدرس)
+    // ---------------------------------------------------------
+    if (action === "deleteTransaction") {
+      var studentName = (data.studentName || "").toString().trim();
+      var teacherName = (data.teacherName || "").toString().trim();
+      var category    = (data.category || "").toString().trim();
+      var grade       = (data.grade || "").toString().trim();
+      var dateStr     = (data.date || "").toString().trim();
+      var targetAmt   = parseFloat(data.amount);
+
+      if (!studentName || !teacherName) {
+        return createResponse({ status: "error", message: "بيانات الطالب والمعلم مطلوبة لإتمام الحذف." });
+      }
+
+      var normStudent = normalizeArabic(studentName);
+      var normTeacher = normalizeArabic(teacherName);
+
+      var deletedFromTrans = false;
+      var deletedFromTeacher = false;
+
+      // أ) الحذف من شيت Transactions العام (من الأسفل للأعلى، حذف نسخة واحدة فقط)
+      var transSheet = ss.getSheetByName("Transactions");
+      if (transSheet && transSheet.getLastRow() > 1) {
+        var transRange = transSheet.getRange(1, 1, transSheet.getLastRow(), transSheet.getLastColumn());
+        var transValues = transRange.getValues();
+
+        for (var i = transValues.length - 1; i >= 1; i--) {
+          var rDateVal = transValues[i][0];
+          var rStudent = normalizeArabic(transValues[i][1]);
+          var rTeacher = normalizeArabic(transValues[i][2]);
+          var rCat     = (transValues[i][3] || "").toString().trim();
+          var rGrade   = (transValues[i][4] || "").toString().trim();
+          var rAmt     = parseFloat(transValues[i][5]);
+
+          var matchStudent = (rStudent === normStudent);
+          var matchTeacher = (rTeacher === normTeacher);
+          var matchAmount  = (isNaN(targetAmt) || rAmt === targetAmt);
+          var matchCat     = (!category || rCat === category);
+          var matchGrade   = (!grade || rGrade === grade);
+          var matchDate    = true;
+
+          if (dateStr && rDateVal) {
+            matchDate = compareDatesFlexible(rDateVal, dateStr);
+          }
+
+          if (matchStudent && matchTeacher && matchAmount && matchCat && matchGrade && matchDate) {
+            transSheet.deleteRow(i + 1);
+            deletedFromTrans = true;
+            break; // حذف نسخة واحدة فقط لمنع حذف التكرارات الأخرى
+          }
+        }
+      }
+
+      // ب) الحذف من صفحة المعلم الفردية (Teacher Tab)
+      var personalSheet = ss.getSheetByName(teacherName);
+      if (personalSheet && personalSheet.getLastRow() > 1) {
+        var pRange = personalSheet.getRange(1, 1, personalSheet.getLastRow(), personalSheet.getLastColumn());
+        var pValues = pRange.getValues();
+
+        for (var j = pValues.length - 1; j >= 1; j--) {
+          var pDateVal = pValues[j][0];
+          var pStudent = normalizeArabic(pValues[j][1]);
+          var pCat     = (pValues[j][2] || "").toString().trim();
+          var pGrade   = (pValues[j][3] || "").toString().trim();
+          var pAmt     = parseFloat(pValues[j][4]);
+
+          var pMatchStudent = (pStudent === normStudent);
+          var pMatchAmount  = (isNaN(targetAmt) || pAmt === targetAmt);
+          var pMatchCat     = (!category || pCat === category);
+          var pMatchGrade   = (!grade || pGrade === grade);
+          var pMatchDate    = true;
+
+          if (dateStr && pDateVal) {
+            pMatchDate = compareDatesFlexible(pDateVal, dateStr);
+          }
+
+          if (pMatchStudent && pMatchAmount && pMatchCat && pMatchGrade && pMatchDate) {
+            personalSheet.deleteRow(j + 1);
+            deletedFromTeacher = true;
+            break; // حذف نسخة واحدة فقط
+          }
+        }
+      }
+
+      if (deletedFromTrans || deletedFromTeacher) {
+        return createResponse({
+          status: "success",
+          message: "تم حذف معاملة التحصيل بنجاح من الشيت العام ومن صفحة المعلم.",
+          deletedFromTransactions: deletedFromTrans,
+          deletedFromTeacherSheet: deletedFromTeacher
+        });
+      } else {
+        return createResponse({
+          status: "warning",
+          message: "لم يتم العثور على سجل مطابق تماماً للحذف، يرجى تحديث البيانات."
+        });
+      }
+    }
+
     return createResponse({ status: "error", message: "إجراء غير معروف: " + action });
 
   } catch (error) {
@@ -480,12 +580,36 @@ function createResponse(data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+/**
+ * دالة توحيد وتطبيع الأسماء والنصوص العربية لمطابقة السجلات بدقة
+ */
+function normalizeArabic(text) {
+  if (!text) return "";
+  var s = text.toString().trim();
+  s = s.replace(/[\u064B-\u065F\u0640]/g, '');
+  s = s.replace(/\bعبد\s+([\u0621-\u064A])/g, 'عبد$1');
+  s = s.replace(/\b(أبو|ابو|أبي|ابي|أبا|ابا)\s+([\u0621-\u064A])/g, '$1$2');
+  s = s.replace(/[إأآٱ]/g, 'ا');
+  s = s.replace(/ة\b/g, 'ه');
+  s = s.replace(/[ىي]/g, 'ي');
+  return s.replace(/\s+/g, ' ').trim();
+}
 
 /**
- * إنشاء استجابة JSON موحدة مع الهيدر الصحيح
+ * مقارنة التواريخ بمرونة لتجنب اختلاف كائنات التاريخ والنصوص
  */
-function createResponse(data) {
-  return ContentService
-    .createTextOutput(JSON.stringify(data))
-    .setMimeType(ContentService.MimeType.JSON);
+function compareDatesFlexible(sheetDate, targetDateStr) {
+  if (!sheetDate || !targetDateStr) return true;
+  try {
+    var d1 = new Date(sheetDate);
+    var d2 = new Date(targetDateStr);
+    if (!isNaN(d1.getTime()) && !isNaN(d2.getTime())) {
+      return (d1.getFullYear() === d2.getFullYear() &&
+              d1.getMonth() === d2.getMonth() &&
+              d1.getDate() === d2.getDate());
+    }
+  } catch(e) {}
+  var sDate = sheetDate.toString().trim();
+  var tDate = targetDateStr.toString().trim();
+  return sDate.indexOf(tDate) !== -1 || tDate.indexOf(sDate) !== -1;
 }
