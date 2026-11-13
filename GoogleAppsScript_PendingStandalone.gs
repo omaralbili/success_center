@@ -90,9 +90,10 @@ function doPost(e) {
       });
     }
 
-    // 2. إزالة الطلب من الشيت وحذف الإيصال من الدرايف عند التأكيد أو الحذف
+    // 2. إزالة الطلب من الشيت (مع خيار مسح الإيصال أو الاحتفاظ به)
     if (action === "removePendingTransaction" || action === "confirmPendingTransaction") {
       var requestId = (data.requestId || "").toString().trim();
+      var keepReceipt = data.keepReceipt === true;
       if (!requestId) {
         return createResponse({ status: "error", message: "معرف الطلب مطلوب." });
       }
@@ -119,8 +120,10 @@ function doPost(e) {
         return createResponse({ status: "error", message: "لم يتم العثور على الطلب المطلوب." });
       }
 
-      // مسح الإيصال من الدرايف لتوفير المساحة
-      deleteReceiptSafely(fileUrl);
+      // مسح الإيصال من الدرايف إذا لم يُطلب الاحتفاظ به
+      if (!keepReceipt) {
+        deleteReceiptSafely(fileUrl);
+      }
 
       // مسح الصف من الشيت
       pendingSheet.deleteRow(foundRow);

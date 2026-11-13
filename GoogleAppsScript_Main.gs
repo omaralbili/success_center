@@ -141,7 +141,13 @@ function doPost(e) {
       }
 
       var defaultStudent = (transactions[0] && transactions[0].studentName) ? transactions[0].studentName : "Bulk";
-      var fileUrl = uploadReceiptSafely(data.fileBase64, data.mimeType, data.fileName, defaultStudent);
+      var fileUrl = (data.fileUrl && data.fileUrl.toString().trim()) ? data.fileUrl.toString().trim() : "";
+      if (!fileUrl && data.fileBase64) {
+        fileUrl = uploadReceiptSafely(data.fileBase64, data.mimeType, data.fileName, defaultStudent);
+      }
+      if (!fileUrl) {
+        fileUrl = "لا يوجد إيصال";
+      }
 
       var transSheet = getOrCreateTransactionsSheet(ss);
       var newTransRows = [];
@@ -325,9 +331,6 @@ function doPost(e) {
           sortSheetData(touchedTeacherSheets[tKey], 3, 4);
         }
       }
-
-      // حذف صورة الإيصال المؤقتة من Drive لتوفير المساحة بعد التأكيد
-      deleteReceiptFileSafely(fileUrl);
 
       // مسح الطلب من شيت العمليات المعلقة بعد تأكيده وترحيله بنجاح
       pendingSheet.deleteRow(foundRow);

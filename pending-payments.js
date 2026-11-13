@@ -338,13 +338,15 @@ async function confirmPayment(requestId, studentName) {
                 })
             });
         } else {
-            // المعاملة في الشيت المستقل: ترحيل للشيت الرئيسي وحذف من المستقل بالتوازي الفوري
+            // المعاملة في الشيت المستقل: ترحيل للشيت الرئيسي مع رابط الإيصال وحذف الصف من المستقل مع الحفاظ على ملف الإيصال
+            const receiptLink = targetReq.receiptLink || "";
             await Promise.all([
                 fetch(MAIN_SCRIPT_URL, {
                     method: 'POST',
                     body: JSON.stringify({
                         action: "addTransactionsBulk",
                         transactions: itemsToRecord,
+                        fileUrl: receiptLink,
                         fileBase64: "",
                         mimeType: "",
                         fileName: ""
@@ -354,7 +356,8 @@ async function confirmPayment(requestId, studentName) {
                     method: 'POST',
                     body: JSON.stringify({
                         action: "removePendingTransaction",
-                        requestId: requestId
+                        requestId: requestId,
+                        keepReceipt: true
                     })
                 })
             ]);
