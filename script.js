@@ -30,7 +30,8 @@ function normalizeArabicName(name) {
     let str = name.toString().trim().replace(/[\u064B-\u065F\u0640]/g, '');
     str = str.replace(/\bعبد\s+([\u0621-\u064A])/g, 'عبد$1');
     str = str.replace(/\b(أبو|ابو|أبي|ابي|أبا|ابا)\s+([\u0621-\u064A])/g, '$1$2');
-    str = str.replace(/[إأآٱ]/g, 'ا').replace(/ة\b/g, 'ه').replace(/[ىي]/g, 'ي');
+    str = str.replace(/\bابن\s+/g, 'بن ');
+    str = str.replace(/[إأآٱ]/g, 'ا').replace(/ة\b/g, 'ه').replace(/[ىي]/g, 'ى');
     return str.replace(/\s+/g, ' ').trim();
 }
 
@@ -1117,6 +1118,10 @@ async function addTransaction() {
                 );
 
                 const resJson = await res.json().catch(() => ({ status: "success" }));
+                if (resJson && resJson.status === "duplicate") {
+                    showToast(resJson.message, "warning");
+                    return;
+                }
                 if (resJson && resJson.status === "error") {
                     showToast(resJson.message || "حدث خطأ أثناء تسجيل طلب الدفع.", "danger");
                 } else {
@@ -1140,17 +1145,29 @@ async function addTransaction() {
                         })
                     );
                     const resJson = await res.json().catch(() => ({ status: "success" }));
+                    if (resJson && resJson.status === "duplicate") {
+                        showToast(resJson.message, "warning");
+                        return;
+                    }
                     if (resJson && resJson.status === "success") {
                         bulkSuccess = true;
+                        if (resJson.skippedCount && resJson.skippedCount > 0) {
+                            showToast(resJson.message, "warning");
+                        } else {
+                            showToast(`تم بنجاح حفظ تحصيل (${resJson.count || transactionsToPay.length}) معلمين في الشيت!`, "success");
+                        }
+                        resetPaymentForm();
+                        return;
                     }
                 } catch (bulkErr) {
                     console.warn("Bulk submission failed, fallback to sequential queue", bulkErr);
                 }
 
                 if (!bulkSuccess) {
+                    let recordedSeq = 0;
                     for (let i = 0; i < transactionsToPay.length; i++) {
                         const tx = transactionsToPay[i];
-                        await enqueueTransaction(() =>
+                        const res = await enqueueTransaction(() =>
                             fetchWithRetry(SCRIPT_URL, {
                                 method: 'POST',
                                 body: JSON.stringify({
@@ -1167,11 +1184,18 @@ async function addTransaction() {
                                 })
                             })
                         );
+                        const rJson = await res.json().catch(() => ({ status: "success" }));
+                        if (rJson && rJson.status === "duplicate") {
+                            showToast(rJson.message, "warning");
+                        } else if (rJson && rJson.status === "success") {
+                            recordedSeq++;
+                        }
+                    }
+                    if (recordedSeq > 0) {
+                        showToast(`تم بنجاح حفظ تحصيل (${recordedSeq}) معلمين في الشيت!`, "success");
+                        resetPaymentForm();
                     }
                 }
-
-                showToast(`تم بنجاح حفظ تحصيل (${transactionsToPay.length}) معلمين في الشيت!`, "success");
-                resetPaymentForm();
             }
         } catch (e) {
             console.error("Submission error:", e);
@@ -1230,6 +1254,10 @@ async function addTransaction() {
             );
 
             const resJson = await res.json().catch(() => ({ status: "success" }));
+            if (resJson && resJson.status === "duplicate") {
+                showToast(resJson.message, "warning");
+                return;
+            }
             if (resJson && resJson.status === "error") {
                 showToast(resJson.message || "حدث خطأ أثناء تسجيل طلب الدفع.", "danger");
             } else {
@@ -1257,6 +1285,10 @@ async function addTransaction() {
             );
 
             const resJson = await res.json().catch(() => ({ status: "success" }));
+            if (resJson && resJson.status === "duplicate") {
+                showToast(resJson.message, "warning");
+                return;
+            }
             if (resJson && resJson.status === "error") {
                 showToast(resJson.message || "حدث خطأ أثناء حفظ المعاملة.", "danger");
             } else {

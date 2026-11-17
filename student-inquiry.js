@@ -39,7 +39,7 @@ function normalizeArabicName(name) {
     // 4) توحيد أشكال الهمزات
     str = str.replace(/[إأآٱ]/g, 'ا');
     str = str.replace(/ة\b/g, 'ه');
-    str = str.replace(/[ىي]/g, 'ي');
+    str = str.replace(/[ىي]/g, 'ى');
 
     // إزالة المسافات الزائدة
     str = str.replace(/\s+/g, ' ').trim();

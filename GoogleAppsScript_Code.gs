@@ -44,6 +44,9 @@ function doPost(e) {
     var grade = (data.grade || "").toString().trim();
     var date = (data.date || new Date().toLocaleString('ar-EG')).toString().trim();
 
+    // توحيد الحروف للطلاب الجدد والتعديلات: (أ، إ، آ -> ا) و (ة -> ه) و (ي -> ى)
+    studentName = standardizeStudentName(studentName);
+
     // التأكد من وجود الشيت المجمع
     var mainSheet = getOrCreateSheet(ss, MAIN_SHEET_NAME, MAIN_HEADERS, "#1e3a8a");
 
@@ -269,6 +272,22 @@ function sanitizeSheetName(name) {
     sanitized = sanitized.substring(0, 90);
   }
   return sanitized;
+}
+
+/**
+ * توحيد حروف اسم الطالب عند الإضافة والتعديل:
+ * اعتماد: ( أ - ا - آ -> ا ) و ( ة -> ه ) و ( ي - ى -> ى )
+ */
+function standardizeStudentName(name) {
+  if (!name) return "";
+  var s = name.toString().trim().replace(/[\u064B-\u065F\u0640]/g, '');
+  s = s.replace(/\bعبد\s+([\u0621-\u064A])/g, 'عبد$1');
+  s = s.replace(/\b(أبو|ابو|أبي|ابي|أبا|ابا)\s+([\u0621-\u064A])/g, '$1$2');
+  s = s.replace(/\bابن\s+/g, 'بن ');
+  s = s.replace(/[إأآٱ]/g, 'ا');
+  s = s.replace(/ة\b/g, 'ه');
+  s = s.replace(/[ي]/g, 'ى');
+  return s.replace(/\s+/g, ' ').trim();
 }
 
 /**

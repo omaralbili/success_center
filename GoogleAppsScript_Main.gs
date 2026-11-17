@@ -86,6 +86,7 @@ function doPost(e) {
 
       if (existingTeachers.indexOf(teacherName) === -1) {
         teacherSheet.appendRow([teacherName]);
+        formatSheetCells(teacherSheet);
       }
 
       // إنشاء الشيت الفردي للمعلم إذا لم يكن موجوداً
@@ -115,6 +116,15 @@ function doPost(e) {
         return createResponse({ status: "error", message: "بيانات الطالب والمعلم مطلوبة." });
       }
 
+      // فحص منع التكرار لنفس الطالب والمدرس في نفس الشهر
+      var dupCheck = checkExistingPayment(ss, studentName, teacherName, date);
+      if (dupCheck.isDuplicate) {
+        return createResponse({
+          status: "duplicate",
+          message: "تنبيه: الطالب (" + studentName + ") مسجل له دفع مسبقاً لدى الأستاذ/ (" + teacherName + ") لشهر (" + dupCheck.month + ") بتاريخ (" + dupCheck.existingDate + "). تم منع تسجيل المعاملة المكررة."
+        });
+      }
+
       // رفع الملف بأمان دون إيقاف العملية في حال فشل التخزين
       var fileUrl = uploadTempReceiptSafely(data.fileBase64, data.mimeType, data.fileName, studentName);
 
@@ -122,11 +132,13 @@ function doPost(e) {
       var transSheet = getOrCreateTransactionsSheet(ss);
       transSheet.appendRow([date, studentName, teacherName, category, grade, amount, fileUrl]);
       sortSheetData(transSheet, 4, 5);
+      formatSheetCells(transSheet);
 
       // شيت المعلم الفردي
       var tSheet = getOrCreateTeacherSheet(ss, teacherName);
       tSheet.appendRow([date, studentName, category, grade, amount, fileUrl]);
       sortSheetData(tSheet, 3, 4);
+      formatSheetCells(tSheet);
 
       return createResponse({ status: "success", message: "تم حفظ بيانات التحصيل بنجاح.", fileUrl: fileUrl });
     }
@@ -140,7 +152,35 @@ function doPost(e) {
         return createResponse({ status: "error", message: "لا توجد معاملات مرسلة لتسجيلها." });
       }
 
-      var defaultStudent = (transactions[0] && transactions[0].studentName) ? transactions[0].studentName : "Bulk";
+      // فحص ومنع التكرار لكل معاملة مع المعلم في نفس الشهر
+      var allowedTransactions = [];
+      var skippedDuplicates = [];
+
+      for (var b = 0; b < transactions.length; b++) {
+        var bTx = transactions[b];
+        if (!bTx) continue;
+        var bStudent = (bTx.studentName || "").toString().trim();
+        var bTeacher = (bTx.teacherName || "").toString().trim();
+        var bDate    = (bTx.date || new Date().toLocaleString('ar-EG')).toString().trim();
+
+        if (bStudent && bTeacher) {
+          var bDup = checkExistingPayment(ss, bStudent, bTeacher, bDate);
+          if (bDup.isDuplicate) {
+            skippedDuplicates.push("المعلم: " + bTeacher + " (مدفوع مسبقاً لشهر " + bDup.month + ")");
+            continue;
+          }
+        }
+        allowedTransactions.push(bTx);
+      }
+
+      if (allowedTransactions.length === 0) {
+        return createResponse({
+          status: "duplicate",
+          message: "تنبيه: جميع المعلمين المحددين مدفوع لهم مسبقاً في هذا الشهر:\n" + skippedDuplicates.join("\n") + "\nتم منع التسجيل المكرر."
+        });
+      }
+
+      var defaultStudent = (allowedTransactions[0] && allowedTransactions[0].studentName) ? allowedTransactions[0].studentName : "Bulk";
       var fileUrl = (data.fileUrl && data.fileUrl.toString().trim()) ? data.fileUrl.toString().trim() : "";
       if (!fileUrl && data.fileBase64) {
         fileUrl = uploadReceiptSafely(data.fileBase64, data.mimeType, data.fileName, defaultStudent);
@@ -153,8 +193,8 @@ function doPost(e) {
       var newTransRows = [];
       var teacherRowsMap = {};
 
-      for (var i = 0; i < transactions.length; i++) {
-        var tx = transactions[i];
+      for (var i = 0; i < allowedTransactions.length; i++) {
+        var tx = allowedTransactions[i];
         if (!tx) continue;
 
         var sName = (tx.studentName || "").toString().trim();
@@ -176,6 +216,7 @@ function doPost(e) {
       if (newTransRows.length > 0) {
         var startRow = transSheet.getLastRow() + 1;
         transSheet.getRange(startRow, 1, newTransRows.length, 7).setValues(newTransRows);
+        formatSheetCells(transSheet);
       }
 
       // كتابة دفعية فائقة السرعة لكل شيت معلم
@@ -183,12 +224,19 @@ function doPost(e) {
         var tSheet = getOrCreateTeacherSheet(ss, tKey);
         var tStartRow = tSheet.getLastRow() + 1;
         tSheet.getRange(tStartRow, 1, teacherRowsMap[tKey].length, 6).setValues(teacherRowsMap[tKey]);
+        formatSheetCells(tSheet);
+      }
+
+      var successMsg = "تم حفظ التحصيلات بنجاح (" + allowedTransactions.length + " معلمين)";
+      if (skippedDuplicates.length > 0) {
+        successMsg += "\n(تم تخطي " + skippedDuplicates.length + " معلمين لوجود دفع مسبق في نفس الشهر).";
       }
 
       return createResponse({
         status: "success",
-        message: "تم حفظ التحصيلات بنجاح فائق",
-        count: transactions.length,
+        message: successMsg,
+        count: allowedTransactions.length,
+        skippedCount: skippedDuplicates.length,
         fileUrl: fileUrl
       });
     }
@@ -229,6 +277,7 @@ function doPost(e) {
         "معلق",
         itemsJson
       ]);
+      formatSheetCells(pendingSheet);
 
       return createResponse({
         status: "success",
@@ -274,14 +323,14 @@ function doPost(e) {
         return createResponse({ status: "warning", message: "هذا الطلب تم تأكيده بالفعل مسبقاً." });
       }
 
-      var reqDate     = targetData[1];
-      var sName       = targetData[2];
+      var reqDate         = targetData[1];
+      var sName           = targetData[2];
       var fallbackTeacher = targetData[3];
-      var cat         = targetData[4];
-      var grd         = targetData[5];
-      var totAmt      = targetData[6];
-      var fileUrl     = targetData[7];
-      var itemsJson   = targetData[9];
+      var cat             = targetData[4];
+      var grd             = targetData[5];
+      var totAmt          = targetData[6];
+      var fileUrl         = targetData[7];
+      var itemsJson       = targetData[9];
 
       var items = [];
       try {
@@ -299,9 +348,11 @@ function doPost(e) {
         }];
       }
 
-      // تسجيل المعاملات في Transactions وشيتات المعلمين
+      // تسجيل المعاملات في Transactions وشيتات المعلمين (مع تخطي المكرر في نفس الشهر)
       var transSheet = getOrCreateTransactionsSheet(ss);
       var touchedTeacherSheets = {};
+      var recordedCount = 0;
+      var skippedCount = 0;
 
       for (var k = 0; k < items.length; k++) {
         var itm = items[k];
@@ -315,6 +366,13 @@ function doPost(e) {
 
         if (!itemStudent || !itemTeacher) continue;
 
+        // فحص التكرار لنفس المعلم في نفس الشهر
+        var kDup = checkExistingPayment(ss, itemStudent, itemTeacher, itemDt);
+        if (kDup.isDuplicate) {
+          skippedCount++;
+          continue;
+        }
+
         // إضافة في شيت Transactions العام
         transSheet.appendRow([itemDt, itemStudent, itemTeacher, itemCat, itemGrd, itemAmt, fileUrl]);
 
@@ -322,22 +380,34 @@ function doPost(e) {
         var tSheet = touchedTeacherSheets[itemTeacher] || getOrCreateTeacherSheet(ss, itemTeacher);
         touchedTeacherSheets[itemTeacher] = tSheet;
         tSheet.appendRow([itemDt, itemStudent, itemCat, itemGrd, itemAmt, fileUrl]);
+        recordedCount++;
       }
 
-      // إعادة الترتيب
+      // إعادة الترتيب وتنسيق الخلايا
       sortSheetData(transSheet, 4, 5);
+      formatSheetCells(transSheet);
       for (var tKey in touchedTeacherSheets) {
         if (touchedTeacherSheets.hasOwnProperty(tKey)) {
           sortSheetData(touchedTeacherSheets[tKey], 3, 4);
+          formatSheetCells(touchedTeacherSheets[tKey]);
         }
       }
 
-      // مسح الطلب من شيت العمليات المعلقة بعد تأكيده وترحيله بنجاح
+      // مسح الطلب من شيت العمليات المعلقة بعد معالجته
       pendingSheet.deleteRow(foundRow);
+
+      var confirmMsg = recordedCount > 0
+        ? "تم تأكيد طلب الدفع بنجاح وترحيله إلى سجلات التحصيل (" + recordedCount + " معاملات)."
+        : "تم فحص الطلب: المعاملات مسجلة مسبقاً في هذا الشهر وتم منع التكرار.";
+      if (skippedCount > 0 && recordedCount > 0) {
+        confirmMsg += " (تم تخطي " + skippedCount + " معاملات لوجود دفع مسبق).";
+      }
 
       return createResponse({
         status: "success",
-        message: "تم تأكيد طلب الدفع بنجاح وترحيله إلى سجلات التحصيل وشيتات المعلمين."
+        message: confirmMsg,
+        recordedCount: recordedCount,
+        skippedCount: skippedCount
       });
     }
 
@@ -695,26 +765,7 @@ function doGet(e) {
 // =========================================================
 
 /**
- * الحصول على شيت Transactions أو إنشاؤه وتنسيقه
- */
-/**
- * الحصول على شيت العمليات المعلقة أو إنشاؤه وتنسيقه
- */
-/**
  * الحصول على شيت العمليات المعلقة أو إنشاؤه وتنسيقه الاحترافي الشامل
- * يتضمن:
- * 1. ضبط اتجاه الشيت من اليمين لليسار.
- * 2. ترويسة متناسقة وتجميد الصف الأول لمنع اختفائه أثناء التمرير.
- * 3. تخصيص عرض كل عمود حسب نوع محتواه لمنع قطع النصوص أو تشوه البيانات.
- * 4. محاذاة تلقائية للنصوص والأرقام والتواريخ وتنسيق العملات.
- */
-/**
- * الحصول على شيت العمليات المعلقة أو إنشاؤه وتنسيقه الاحترافي الشامل
- * يتضمن:
- * 1. ضبط اتجاه الشيت من اليمين لليسار (RTL).
- * 2. ترويسة متناسقة وتجميد الصف الأول لمنع اختفائه أثناء التمرير.
- * 3. تخصيص عرض كل عمود بدقة هندسية تمنع أي قص أو تشوه في أسماء المعلمين والروابط.
- * 4. محاذاة وتنسيق تلقائي وتفعيل قائمة منسدلة (Data Validation) لعمود الحالة.
  */
 function getOrCreatePendingSheet(ss) {
   var sheetName = "العمليات المعلقة";
@@ -793,9 +844,6 @@ function getOrCreatePendingSheet(ss) {
 }
 
 /**
- * الحصول على شيت المعلم الفردي أو إنشاؤه وتنسيقه
- */
-/**
  * الحصول على شيت Transactions أو إنشاؤه وتنسيقه
  */
 function getOrCreateTransactionsSheet(ss) {
@@ -809,6 +857,9 @@ function getOrCreateTransactionsSheet(ss) {
   return sheet;
 }
 
+/**
+ * الحصول على شيت المعلم الفردي أو إنشاؤه وتنسيقه
+ */
 function getOrCreateTeacherSheet(ss, teacherName) {
   var sheet = ss.getSheetByName(teacherName);
   if (!sheet) {
@@ -820,9 +871,6 @@ function getOrCreateTeacherSheet(ss, teacherName) {
   return sheet;
 }
 
-/**
- * رفع ملف الإيصال إلى Drive بشكل آمن بدون إيقاف بقية العمليات عند حدوث خطأ
- */
 /**
  * مجلد الإيصالات المؤقتة لطلبات الدفع المعلقة
  */
@@ -866,7 +914,7 @@ function uploadTempReceiptSafely(base64Data, mimeType, fileName, studentName) {
     }
     var decoded = Utilities.base64Decode(base64Data);
     var safeMime = mimeType || "image/jpeg";
-    var safeName = fileName || ("temp_receipt_" + (studentName ? studentName.replace(/s+/g, '_') : "student") + "_" + new Date().getTime() + ".jpg");
+    var safeName = fileName || ("temp_receipt_" + (studentName ? studentName.replace(/\s+/g, '_') : "student") + "_" + new Date().getTime() + ".jpg");
     var blob = Utilities.newBlob(decoded, safeMime, safeName);
     var file = folder.createFile(blob);
     try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e){}
@@ -883,7 +931,7 @@ function deleteReceiptFileSafely(fileUrl) {
   if (!fileUrl || typeof fileUrl !== 'string' || fileUrl.indexOf('drive.google.com') === -1) return;
   try {
     var fileId = "";
-    var m1 = fileUrl.match(/[-w]{25,}/);
+    var m1 = fileUrl.match(/[-\w]{25,}/);
     if (m1) fileId = m1[0];
     if (fileId) {
       var file = DriveApp.getFileById(fileId);
@@ -973,6 +1021,21 @@ function formatHeaderRow(sheet, cols, bgColor) {
 }
 
 /**
+ * دالة موحدة لتنسيق خلايا البيانات (التفاف النص + محاذاة للمنتصف أفقياً ورأسياً)
+ */
+function formatSheetCells(sheet) {
+  if (!sheet) return;
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastRow <= 1 || lastCol < 1) return;
+
+  var range = sheet.getRange(2, 1, lastRow - 1, lastCol);
+  range.setWrap(true);
+  range.setHorizontalAlignment("center");
+  range.setVerticalAlignment("middle");
+}
+
+/**
  * إنشاء استجابة JSON موحدة مع الهيدر الصحيح
  */
 function createResponse(data) {
@@ -990,10 +1053,86 @@ function normalizeArabic(text) {
   s = s.replace(/[\u064B-\u065F\u0640]/g, '');
   s = s.replace(/\bعبد\s+([\u0621-\u064A])/g, 'عبد$1');
   s = s.replace(/\b(أبو|ابو|أبي|ابي|أبا|ابا)\s+([\u0621-\u064A])/g, '$1$2');
+  s = s.replace(/\bابن\s+/g, 'بن ');
   s = s.replace(/[إأآٱ]/g, 'ا');
   s = s.replace(/ة\b/g, 'ه');
-  s = s.replace(/[ىي]/g, 'ي');
+  s = s.replace(/[ىي]/g, 'ى');
   return s.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * استخراج صيغة السنة والشهر YYYY-MM من أي تاريخ (Date object أو نص عربي/إنجليزي)
+ */
+function extractYearMonth(rawDate) {
+  if (!rawDate) {
+    var now = new Date();
+    return Utilities.formatDate(now, "GMT+2", "yyyy-MM");
+  }
+  if (Object.prototype.toString.call(rawDate) === '[object Date]' && !isNaN(rawDate.getTime())) {
+    return Utilities.formatDate(rawDate, "GMT+2", "yyyy-MM");
+  }
+  var str = rawDate.toString().replace(/[\u0660-\u0669]/g, function(d) {
+    return d.charCodeAt(0) - 1632;
+  }).replace(/\([^\)]*\)/g, '').trim();
+
+  // YYYY-MM-DD
+  var m1 = str.match(/(\d{4})[-\/](\d{1,2})/);
+  if (m1) {
+    var mStr = ("0" + m1[2]).slice(-2);
+    return m1[1] + "-" + mStr;
+  }
+  // DD/MM/YYYY
+  var m2 = str.match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+  if (m2) {
+    var mStr2 = ("0" + m2[2]).slice(-2);
+    return m2[3] + "-" + mStr2;
+  }
+  // محاولة عبر Date
+  try {
+    var d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      return Utilities.formatDate(d, "GMT+2", "yyyy-MM");
+    }
+  } catch(e) {}
+
+  var current = new Date();
+  return Utilities.formatDate(current, "GMT+2", "yyyy-MM");
+}
+
+/**
+ * فحص هل الطالب دفع للمدرس في نفس الشهر مسبقاً في شيت Transactions
+ */
+function checkExistingPayment(ss, studentName, teacherName, dateStr) {
+  var transSheet = ss.getSheetByName("Transactions");
+  if (!transSheet || transSheet.getLastRow() <= 1) {
+    return { isDuplicate: false };
+  }
+
+  var targetMonth = extractYearMonth(dateStr);
+  var normStudent = normalizeArabic(studentName);
+  var normTeacher = normalizeArabic(teacherName);
+
+  var vals = transSheet.getRange(2, 1, transSheet.getLastRow() - 1, 3).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    var rowDate = vals[i][0];
+    var rowStudent = vals[i][1];
+    var rowTeacher = vals[i][2];
+
+    if (!rowStudent || !rowTeacher) continue;
+
+    if (normalizeArabic(rowStudent) === normStudent && normalizeArabic(rowTeacher) === normTeacher) {
+      var rowMonth = extractYearMonth(rowDate);
+      if (rowMonth === targetMonth) {
+        return {
+          isDuplicate: true,
+          month: targetMonth,
+          existingDate: (rowDate ? rowDate.toString() : targetMonth)
+        };
+      }
+    }
+  }
+
+  return { isDuplicate: false };
 }
 
 /**

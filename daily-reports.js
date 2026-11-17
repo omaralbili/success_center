@@ -63,7 +63,7 @@ function normalizeArabicName(name) {
         .replace(/أبو\s+/g, 'أبو')
         .replace(/ابو\s+/g, 'أبو')
         .replace(/[إأآا]/g, 'ا')
-        .replace(/ى/g, 'ي')
+        .replace(/[ىي]/g, 'ى')
         .replace(/ة/g, 'ه')
         .replace(/\s+/g, ' ');
 }

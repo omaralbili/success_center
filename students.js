@@ -31,7 +31,23 @@ function normalizeArabicName(name) {
     str = str.replace(/\bابن\s+/g, 'بن ');
     str = str.replace(/[إأآٱ]/g, 'ا');
     str = str.replace(/ة\b/g, 'ه');
-    str = str.replace(/[ىي]/g, 'ي');
+    str = str.replace(/[ىي]/g, 'ى');
+    return str.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * توحيد حروف الاسم عند إضافة طالب جديد أو تعديله
+ * اعتماد: ( أ - ا - آ -> ا ) و ( ة -> ه ) و ( ي - ى -> ى )
+ */
+function standardizeNewStudentName(name) {
+    if (!name) return "";
+    let str = name.toString().trim().replace(/[\u064B-\u065F\u0640]/g, '');
+    str = str.replace(/\bعبد\s+([\u0621-\u064A])/g, 'عبد$1');
+    str = str.replace(/\b(أبو|ابو|أبي|ابي|أبا|ابا)\s+([\u0621-\u064A])/g, '$1$2');
+    str = str.replace(/\bابن\s+/g, 'بن ');
+    str = str.replace(/[إأآٱ]/g, 'ا');
+    str = str.replace(/ة\b/g, 'ه');
+    str = str.replace(/[ي]/g, 'ى');
     return str.replace(/\s+/g, ' ').trim();
 }
 
@@ -380,7 +396,7 @@ async function handleFormSubmit(e) {
     const categoryInput = document.getElementById("categorySelect");
     const gradeInput = document.getElementById("gradeSelect");
 
-    const sName = displayNormalizedName(nameInput.value.trim());
+    const sName = standardizeNewStudentName(nameInput.value.trim());
     const tName = teacherInput.value;
     const cat = categoryInput.value;
     const grade = gradeInput.value;
@@ -460,7 +476,7 @@ async function handleUpdateStudent() {
         return;
     }
 
-    const sName = displayNormalizedName(document.getElementById("studentNameInput").value.trim());
+    const sName = standardizeNewStudentName(document.getElementById("studentNameInput").value.trim());
     const tName = document.getElementById("teacherSelect").value;
     const cat = document.getElementById("categorySelect").value;
     const grade = document.getElementById("gradeSelect").value;
@@ -526,7 +542,7 @@ async function handleDeleteStudent() {
         return;
     }
 
-    const sName = displayNormalizedName(document.getElementById("studentNameInput").value.trim());
+    const sName = standardizeNewStudentName(document.getElementById("studentNameInput").value.trim());
     const tName = document.getElementById("teacherSelect").value;
     const cat = document.getElementById("categorySelect").value;
     const grade = document.getElementById("gradeSelect").value;

@@ -23,7 +23,7 @@ function normalizeArabicName(name) {
     str = str.replace(/\bابن\s+/g, 'بن ');
     str = str.replace(/[إأآٱ]/g, 'ا');
     str = str.replace(/ة\b/g, 'ه');
-    str = str.replace(/[ىي]/g, 'ي');
+    str = str.replace(/[ىي]/g, 'ى');
     return str.replace(/\s+/g, ' ').trim();
 }
 

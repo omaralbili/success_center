@@ -63,9 +63,19 @@ function doPost(e) {
         return createResponse({ status: "error", message: "اسم الطالب مطلوب لتقديم الطلب." });
       }
 
+      var pendingSheet = getOrCreatePendingSheet(ss);
+
+      // التحقق من وجود طلب معلق مسبقاً لنفس الطالب في نفس الشهر
+      var dupCheck = checkExistingPending(pendingSheet, studentName, dateStr);
+      if (dupCheck.isDuplicate) {
+        return createResponse({
+          status: "duplicate",
+          message: "تنبيه: يوجد طلب دفع معلق بالفعل للطالب (" + studentName + ") لشهر (" + dupCheck.month + ") برقم (" + dupCheck.requestId + ") وهو قيد مراجعة الإدارة. تم منع إرسال طلب مكرر."
+        });
+      }
+
       // رفع الإيصال في المجلد التلقائي للشيت
       var fileUrl = uploadReceiptToDrive(data.fileBase64, data.mimeType, data.fileName, studentName);
-      var pendingSheet = getOrCreatePendingSheet(ss);
       var reqId = "REQ_" + new Date().getTime() + "_" + Math.floor(Math.random() * 1000);
       var itemsJson = JSON.stringify(items);
 
@@ -359,6 +369,85 @@ function deleteReceiptSafely(fileUrl) {
       file.setTrashed(true);
     }
   } catch(e) {}
+}
+
+/**
+ * دالة توحيد وتطبيع الأسماء والنصوص العربية لمطابقة السجلات بدقة
+ */
+function normalizeArabic(text) {
+  if (!text) return "";
+  var s = text.toString().trim();
+  s = s.replace(/[\u064B-\u065F\u0640]/g, '');
+  s = s.replace(/\bعبد\s+([\u0621-\u064A])/g, 'عبد$1');
+  s = s.replace(/\b(أبو|ابو|أبي|ابي|أبا|ابا)\s+([\u0621-\u064A])/g, '$1$2');
+  s = s.replace(/\bابن\s+/g, 'بن ');
+  s = s.replace(/[إأآٱ]/g, 'ا');
+  s = s.replace(/ة\b/g, 'ه');
+  s = s.replace(/[ىي]/g, 'ى');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * استخراج صيغة السنة والشهر YYYY-MM
+ */
+function extractYearMonth(rawDate) {
+  if (!rawDate) {
+    return Utilities.formatDate(new Date(), "GMT+2", "yyyy-MM");
+  }
+  if (Object.prototype.toString.call(rawDate) === '[object Date]' && !isNaN(rawDate.getTime())) {
+    return Utilities.formatDate(rawDate, "GMT+2", "yyyy-MM");
+  }
+  var str = rawDate.toString().replace(/[\u0660-\u0669]/g, function(d) {
+    return d.charCodeAt(0) - 1632;
+  }).replace(/\([^\)]*\)/g, '').trim();
+
+  var m1 = str.match(/(\d{4})[-\/](\d{1,2})/);
+  if (m1) return m1[1] + "-" + ("0" + m1[2]).slice(-2);
+
+  var m2 = str.match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+  if (m2) return m2[3] + "-" + ("0" + m2[2]).slice(-2);
+
+  try {
+    var d = new Date(str);
+    if (!isNaN(d.getTime())) return Utilities.formatDate(d, "GMT+2", "yyyy-MM");
+  } catch(e) {}
+
+  return Utilities.formatDate(new Date(), "GMT+2", "yyyy-MM");
+}
+
+/**
+ * فحص وجود طلب معلق مسبقاً لنفس الطالب في نفس الشهر
+ */
+function checkExistingPending(pendingSheet, studentName, dateStr) {
+  if (!pendingSheet || pendingSheet.getLastRow() <= 1) {
+    return { isDuplicate: false };
+  }
+  var targetMonth = extractYearMonth(dateStr);
+  var normStudent = normalizeArabic(studentName);
+  var vals = pendingSheet.getRange(2, 1, pendingSheet.getLastRow() - 1, 9).getValues();
+
+  for (var i = 0; i < vals.length; i++) {
+    var reqId = vals[i][0];
+    var rowDate = vals[i][1];
+    var rowStudent = vals[i][2];
+    var rowStatus = (vals[i][8] || "").toString().trim();
+
+    // فحص الطلبات التي لا تزال معلقة
+    if (rowStatus !== "معلق" && rowStatus !== "") continue;
+    if (!rowStudent) continue;
+
+    if (normalizeArabic(rowStudent) === normStudent) {
+      var rowMonth = extractYearMonth(rowDate);
+      if (rowMonth === targetMonth) {
+        return {
+          isDuplicate: true,
+          month: targetMonth,
+          requestId: reqId
+        };
+      }
+    }
+  }
+  return { isDuplicate: false };
 }
 
 function createResponse(data) {
